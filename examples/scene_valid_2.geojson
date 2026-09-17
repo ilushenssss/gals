@@ -1,0 +1,44 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "layer": "airspace", "name": "Разрешенное пространство (Санкт-Петербург)", "h_min": 0, "h_max": 250 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[30.20, 59.85], [30.40, 59.85], [30.40, 59.95], [30.20, 59.95], [30.20, 59.85]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "no_fly", "name": "БПЗ Аэропорт", "safety_buffer_m": 200 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[30.29, 59.89], [30.33, 59.89], [30.33, 59.91], [30.29, 59.91], [30.29, 59.89]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "obstacle", "name": "Мачта ЛЭП", "h_min": 0, "h_max": 120 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[30.24, 59.93], [30.245, 59.93], [30.245, 59.933], [30.24, 59.933], [30.24, 59.93]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "launch_site", "name": "ВПП Пулковская" },
+      "geometry": { "type": "Point", "coordinates": [30.22, 59.86] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "reserve_site", "name": "Резерв-Север" },
+      "geometry": { "type": "Point", "coordinates": [30.38, 59.94] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "reserve_site", "name": "Резерв-Юг" },
+      "geometry": { "type": "Point", "coordinates": [30.23, 59.87] }
+    }
+  ]
+}

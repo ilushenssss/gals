@@ -1,0 +1,10 @@
+services:
+  # Сейчас один процесс отдает и API, и статический фронтенд (см. api/app.py).
+  # Отдельные worker (фоновый расчет) и db (PostgreSQL) — по мере реализации
+  # модулей routing/plan (см. docs/code/uav_planner_kanban.html, карточка
+  # "docker compose: ui / api / worker / db").
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

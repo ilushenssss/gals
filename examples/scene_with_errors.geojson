@@ -1,0 +1,52 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "layer": "airspace", "name": "Разрешенное пространство", "h_min": 0, "h_max": 300 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[37.55, 55.72], [37.65, 55.72], [37.65, 55.78], [37.55, 55.78], [37.55, 55.72]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "no_fly", "name": "БПЗ Центральная", "safety_buffer_m": 150 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[37.595, 55.745], [37.615, 55.745], [37.615, 55.755], [37.595, 55.755], [37.595, 55.745]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "no_fly", "name": "БПЗ с самопересечением", "safety_buffer_m": 50 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[37.560, 55.730], [37.570, 55.740], [37.570, 55.730], [37.560, 55.740], [37.560, 55.730]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "obstacle", "name": "Вышка без верхней границы высоты", "h_min": 0 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[37.620, 55.760], [37.625, 55.760], [37.625, 55.763], [37.620, 55.763], [37.620, 55.760]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "launch_site", "name": "ВПП корректная" },
+      "geometry": { "type": "Point", "coordinates": [37.58, 55.73] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "launch_site", "name": "ВПП внутри БПЗ" },
+      "geometry": { "type": "Point", "coordinates": [37.605, 55.750] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "reserve_site", "name": "Резерв за пределами пространства" },
+      "geometry": { "type": "Point", "coordinates": [37.70, 55.75] }
+    }
+  ]
+}
