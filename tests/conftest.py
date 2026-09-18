@@ -90,6 +90,28 @@ def engine(database_url):
     engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def eager_celery():
+    """Задачи выполняются синхронно, без Redis.
+
+    ``task_eager_propagates=False`` — специально: падение задачи должно давать
+    строку ``plan_jobs`` со статусом «Ошибка», как в проде, а не всплывать
+    исключением в тело теста.
+    """
+    from uav_planner.jobs.celery_app import celery_app
+
+    previous = (
+        celery_app.conf.task_always_eager,
+        celery_app.conf.task_eager_propagates,
+    )
+    celery_app.conf.task_always_eager = True
+    celery_app.conf.task_eager_propagates = False
+    try:
+        yield celery_app
+    finally:
+        celery_app.conf.task_always_eager, celery_app.conf.task_eager_propagates = previous
+
+
 @pytest.fixture
 def db(engine):
     """Сессия теста внутри внешней транзакции, которая откатывается в конце."""

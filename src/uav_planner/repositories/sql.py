@@ -11,19 +11,27 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from uav_planner.api.schemas.environment import EnvironmentDetail
 from uav_planner.api.schemas.fleet import FleetDetail
+from uav_planner.api.schemas.job import JobInfo
 from uav_planner.api.schemas.plan import PlanDetail
 from uav_planner.api.schemas.safety import SafetyReport
 from uav_planner.api.schemas.task import TaskDetail
 from uav_planner.db.session import current_session
 from uav_planner.models.environment import Environment
 from uav_planner.models.fleet import FleetUpload
+from uav_planner.models.job import (
+    ACTIVE_STATUSES,
+    ERROR_INTERRUPTED,
+    STATUS_FAILED,
+    STATUS_RUNNING,
+    PlanJob,
+)
 from uav_planner.models.plan import Plan
 from uav_planner.models.safety import SafetyAttemptCounter, SafetyReport as SafetyReportRow
 from uav_planner.models.task import Task
@@ -180,6 +188,13 @@ class SafetyRepository:
         session.flush()
         return report
 
+    def get_report(self, report_id: str) -> SafetyReport:
+        key = _uuid_or_none(report_id)
+        row = current_session().get(SafetyReportRow, key) if key else None
+        if row is None:
+            raise KeyError(report_id)
+        return mappers.safety_report_from_row(row)
+
     def latest_report(self, plan_id: str) -> SafetyReport | None:
         key = _uuid_or_none(plan_id)
         if key is None:
@@ -220,8 +235,164 @@ class SafetyRepository:
         current_session().execute(stmt)
 
 
+class JobRepository:
+    """Строки фонового расчета (ПЛН.ФТ.5).
+
+    Две операции здесь не сводятся к «прочитать-изменить-записать» и написаны
+    на условном SQL специально:
+
+    * ``create`` полагается на два частичных уникальных индекса —
+      ``ON CONFLICT DO NOTHING`` вернет пусто, если работа по этой задаче уже
+      активна (двойной клик) или ключ идемпотентности уже встречался (ретрай
+      сети). Пустой результат — не ошибка: вызывающий отдает существующую
+      работу;
+    * ``mark_interrupted_if_stale`` — ленивый сторож вместо отдельного
+      процесса: работа, чей воркер погиб вместе с контейнером, не должна
+      висеть «Выполняется» вечно и не должна отдаваться как 404 (план
+      обертки, требование к ``GET /api/plan-jobs?task_id=``).
+    """
+
+    def create(
+        self,
+        *,
+        task_id: str,
+        kind: str,
+        idempotency_key: str,
+        plan_id: str | None = None,
+    ) -> JobInfo | None:
+        session = current_session()
+        stmt = (
+            pg_insert(PlanJob)
+            .values(
+                id=uuid.uuid4(),
+                task_id=as_uuid(task_id),
+                kind=kind,
+                status=ACTIVE_STATUSES[0],
+                progress=0,
+                auto_recalc_count=0,
+                cancel_requested=False,
+                idempotency_key=idempotency_key,
+                plan_id=as_uuid(plan_id) if plan_id else None,
+                queued_at=datetime.now(timezone.utc),
+            )
+            .on_conflict_do_nothing()
+            .returning(PlanJob.id)
+        )
+        created_id = session.execute(stmt).scalar_one_or_none()
+        if created_id is None:
+            return None
+        session.flush()
+        return self.get(str(created_id))
+
+    def get(self, job_id: str) -> JobInfo:
+        key = _uuid_or_none(job_id)
+        row = current_session().get(PlanJob, key) if key else None
+        if row is None:
+            raise KeyError(job_id)
+        current_session().refresh(row)
+        return mappers.job_from_row(row)
+
+    def find(self, job_id: str) -> JobInfo | None:
+        try:
+            return self.get(job_id)
+        except KeyError:
+            return None
+
+    def find_active(self, task_id: str) -> JobInfo | None:
+        key = _uuid_or_none(task_id)
+        if key is None:
+            return None
+        row = current_session().scalars(
+            select(PlanJob)
+            .where(PlanJob.task_id == key, PlanJob.status.in_(ACTIVE_STATUSES))
+            .order_by(PlanJob.queued_at.desc())
+        ).first()
+        return None if row is None else mappers.job_from_row(row)
+
+    def find_by_idempotency_key(self, key: str) -> JobInfo | None:
+        row = current_session().scalars(
+            select(PlanJob).where(PlanJob.idempotency_key == key)
+        ).first()
+        return None if row is None else mappers.job_from_row(row)
+
+    def list_by_task_newest_first(self, task_id: str) -> list[JobInfo]:
+        key = _uuid_or_none(task_id)
+        if key is None:
+            return []
+        rows = current_session().scalars(
+            select(PlanJob).where(PlanJob.task_id == key).order_by(PlanJob.queued_at.desc())
+        ).all()
+        return [mappers.job_from_row(r) for r in rows]
+
+    def set_celery_task_id(self, job_id: str, celery_task_id: str) -> None:
+        current_session().execute(
+            update(PlanJob)
+            .where(PlanJob.id == as_uuid(job_id))
+            .values(celery_task_id=celery_task_id)
+        )
+
+    def get_celery_task_id(self, job_id: str) -> str | None:
+        key = _uuid_or_none(job_id)
+        if key is None:
+            return None
+        return current_session().scalar(
+            select(PlanJob.celery_task_id).where(PlanJob.id == key)
+        )
+
+    def request_cancel(self, job_id: str) -> bool:
+        """Кооперативный флаг отмены. False — работа уже завершилась."""
+        key = _uuid_or_none(job_id)
+        if key is None:
+            return False
+        result = current_session().execute(
+            update(PlanJob)
+            .where(PlanJob.id == key, PlanJob.status.in_(ACTIVE_STATUSES))
+            .values(cancel_requested=True)
+        )
+        return result.rowcount > 0
+
+    def finish(self, job_id: str, status: str, **values) -> None:
+        """Записать исход работы. Вызывается отменой из HTTP-запроса; воркер
+        пишет исход сам, своей короткой транзакцией (``jobs/tasks.py``)."""
+        key = _uuid_or_none(job_id)
+        if key is None:
+            return
+        current_session().execute(
+            update(PlanJob)
+            .where(PlanJob.id == key)
+            .values(status=status, finished_at=datetime.now(timezone.utc), **values)
+        )
+
+    def mark_interrupted_if_stale(self, job_id: str, stale_after_s: float) -> bool:
+        """Работа «Выполняется» без свежего heartbeat — воркер погиб.
+
+        Статус «В очереди» сюда не попадает намеренно: очередь переживает
+        рестарт (Redis с appendonly), и долгое ожидание в ней — норма.
+        """
+        key = _uuid_or_none(job_id)
+        if key is None:
+            return False
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_s)
+        result = current_session().execute(
+            update(PlanJob)
+            .where(
+                PlanJob.id == key,
+                PlanJob.status == STATUS_RUNNING,
+                or_(PlanJob.heartbeat_at.is_(None), PlanJob.heartbeat_at < cutoff),
+            )
+            .values(
+                status=STATUS_FAILED,
+                error_code=ERROR_INTERRUPTED,
+                error="расчет прерван перезапуском сервиса",
+                finished_at=datetime.now(timezone.utc),
+            )
+        )
+        return result.rowcount > 0
+
+
 environments = EnvironmentRepository()
 tasks = TaskRepository()
 fleet = FleetRepository()
 plans = PlanRepository()
 safety = SafetyRepository()
+jobs = JobRepository()

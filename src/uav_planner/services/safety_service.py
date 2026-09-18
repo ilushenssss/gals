@@ -29,6 +29,7 @@ from uav_planner.geometry import (
     Projector,
     compute_working_area,
 )
+from uav_planner.jobs.progress import ProgressReporter
 from uav_planner.safety import (
     CheckResult,
     SortieTrack,
@@ -213,7 +214,7 @@ def _store_report(original_plan_id: str, plan: PlanDetail, task, checks: list[Sa
     return report
 
 
-def check_plan(plan_id: str) -> SafetyReport:
+def check_plan(plan_id: str, progress: ProgressReporter | None = None) -> SafetyReport:
     """БЕЗ.ФТ.1 + БЕЗ.ФТ.3: полная проверка плана и, при нарушении, до трех
     автоматических пересчетов подряд в модуле «Планирование» — без участия
     оператора, в рамках одного вызова.
@@ -227,31 +228,56 @@ def check_plan(plan_id: str) -> SafetyReport:
     три попытки, как правило, расходуются впустую. Счетчик и итоговое
     ограничение в три попытки при этом соблюдаются честно: оператор
     получает достоверную историю попыток, а не имитацию улучшения.
+
+    ``progress`` — репортер фоновой работы. Именно он делает наблюдаемым
+    третий статус БЕЗ.ФТ.5 «В процессе автоматического пересчета»: в
+    синхронном вызове цикл целиком проходит внутри одного HTTP-запроса, и
+    промежуточное состояние снаружи не видно в принципе. Без репортера
+    (``None``) поведение функции прежнее.
     """
+    progress = progress or ProgressReporter(None)
     original_plan_id = plan_id
     plan, task, env = _load_context(plan_id)
     attempts = repositories.safety.get_attempts(task.id, task.version)
 
+    progress.stage("safety_check")
     checks = _run_checks(env, task, plan)
     while _status_of(checks) == "Есть нарушения" and attempts < MAX_AUTO_RECALC:
         attempts += 1
         repositories.safety.set_attempts(task.id, task.version, attempts)
+        progress.publish(
+            f"В процессе автоматического пересчета ({attempts} из {MAX_AUTO_RECALC})",
+            int(40 + 50 * attempts / (MAX_AUTO_RECALC + 1)),
+        )
         new_summary = plan_service.create_plan(task.id)
         plan = plan_service.get_plan(new_summary.id)
         checks = _run_checks(env, task, plan)
 
+    progress.stage("safety_save")
     return _store_report(original_plan_id, plan, task, checks, attempts)
 
 
-def recheck_plan(plan_id: str) -> SafetyReport:
+def recheck_plan(plan_id: str, progress: ProgressReporter | None = None) -> SafetyReport:
     """БЕЗ.ФТ.6 «Повторить проверку» — повторный вызов проверки на текущей
     версии плана без ее пересчета (например, после того как оператор устранил
     причину нарушения в другом месте — обстановке или парке — не трогая
-    саму задачу и не запуская новый расчет)."""
+    саму задачу и не запуская новый расчет).
+
+    Счетчик автопересчетов здесь только читается — увеличивать его повторная
+    проверка не должна (БЕЗ.ФТ.3: лимит на автоматические пересчеты, а не на
+    ручные проверки)."""
+    progress = progress or ProgressReporter(None)
     plan, task, env = _load_context(plan_id)
+    progress.stage("safety_check")
     checks = _run_checks(env, task, plan)
     attempts = repositories.safety.get_attempts(task.id, task.version)
+    progress.stage("safety_save")
     return _store_report(plan_id, plan, task, checks, attempts)
+
+
+def get_report(report_id: str) -> SafetyReport:
+    """Отчет по идентификатору — так фоновая работа отдает свой результат."""
+    return repositories.safety.get_report(report_id)
 
 
 def get_latest_report(plan_id: str) -> SafetyReport:

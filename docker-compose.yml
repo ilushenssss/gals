@@ -1,8 +1,8 @@
 # Полный запуск сервиса «Галс»: docker compose up --build
 #
 # Состав растет по мере реализации плана обертки: сейчас поднимаются db,
-# redis, одноразовый накат миграций и api (он же пока отдает фронтенд).
-# Дальше добавятся worker/beat (фоновый расчет) и web (SPA за nginx).
+# redis, одноразовый накат миграций, api (он же пока отдает фронтенд) и
+# worker (фоновый расчет). Дальше добавится web (SPA за nginx).
 
 services:
   db:
@@ -84,6 +84,52 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Тот же образ, другая команда. Отдельный сервис, а не поток внутри api:
+  # получасовой расчет не должен делить процесс с HTTP, а масштабируется он
+  # независимо (docker compose up --scale worker=3).
+  worker:
+    build: .
+    command:
+      - celery
+      - -A
+      - uav_planner.jobs.celery_app:celery_app
+      - worker
+      # Одна длинная задача на процесс: prefetch=1, чтобы взятое сообщение не
+      # лежало в буфере воркера, пока он занят получасовым расчетом.
+      - --loglevel=INFO
+      - --concurrency=${WORKER_CONCURRENCY:-2}
+      - --prefetch-multiplier=1
+      - --queues=gals
+    environment:
+      GALS_ENV: ${GALS_ENV:-dev}
+      GALS_DEBUG: ${GALS_DEBUG:-false}
+      GALS_LOG_LEVEL: ${GALS_LOG_LEVEL:-INFO}
+      GALS_DATABASE_URL: ${GALS_DATABASE_URL:-postgresql+psycopg://gals:gals@db:5432/gals}
+      GALS_REDIS_URL: ${GALS_REDIS_URL:-redis://redis:6379/0}
+      GALS_SERVE_STATIC: ${GALS_SERVE_STATIC:-true}
+      GALS_PLAN_SYNC_WAIT_SECONDS: ${GALS_PLAN_SYNC_WAIT_SECONDS:-30}
+      GALS_PLAN_HARD_TIME_LIMIT_S: ${GALS_PLAN_HARD_TIME_LIMIT_S:-1980}
+      GALS_PLAN_TIME_LIMIT_S: ${GALS_PLAN_TIME_LIMIT_S:-1800}
+      GALS_EXPORT_DIR: /data/exports
+    volumes:
+      - exports:/data/exports
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # inspect ping спрашивает сам воркер через брокер — проверка сразу и
+      # процесса, и связи с Redis.
+      test: ["CMD-SHELL", "celery -A uav_planner.jobs.celery_app:celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
 
 volumes:

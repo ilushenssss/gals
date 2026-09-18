@@ -50,6 +50,7 @@ from uav_planner.geometry import (
     compute_working_area,
     validate_polygon,
 )
+from uav_planner.jobs.progress import SCHEDULE_SPAN, TRACKS_SPAN, ProgressReporter
 from uav_planner.routing import Track, Vehicle, greedy_assign_and_split
 from uav_planner.schedule import ScheduleError, assign_timestamps
 
@@ -87,9 +88,14 @@ def _time_to_hours(t: time | None) -> float | None:
     return None if t is None else t.hour + t.minute / 60.0 + t.second / 3600.0
 
 
-def _pick_model_group(survey_type: str) -> tuple[str, str, list]:
+def _pick_model_group(survey_type: str, eligible: list | None = None) -> tuple[str, str, list]:
     """ПЛН.ФТ.10-подготовка: выбор модели БВС и совместимой камеры — группа
-    готовых экземпляров с подходящей нагрузкой, в которой больше всего экземпляров."""
+    готовых экземпляров с подходящей нагрузкой, в которой больше всего экземпляров.
+
+    Состав парка стал явным аргументом вместо скрытого глобального чтения
+    внутри функции: фоновая работа должна брать его один раз и не зависеть от
+    того, что оператор перезалил парк посреди получасового счета.
+    """
     spectrum = SPECTRUM_BY_SURVEY_TYPE.get(survey_type)
     if spectrum is None:
         raise PlanInfeasibleError(
@@ -97,7 +103,8 @@ def _pick_model_group(survey_type: str) -> tuple[str, str, list]:
             "(LiDAR и геофизическая съемка — модельные профили, будущая версия)"
         )
 
-    eligible = fleet_service.eligible_instances()
+    if eligible is None:
+        eligible = fleet_service.eligible_instances()
     if not eligible:
         raise PlanInfeasibleError("нет загруженного парка БВС в статусе «Готов»")
 
@@ -139,15 +146,28 @@ def _sortie_route_coords(sortie, start_point: Point) -> list[tuple[float, float]
     return coords
 
 
-def create_plan(task_id: str) -> PlanSummary:
+def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanSummary:
+    """Полный конвейер расчета (ПЛН.ФТ.5).
+
+    ``progress`` — необязательный репортер фонового расчета: он публикует
+    стадию и процент и на каждом тике поднимает ``JobCancelled``, если
+    оператор нажал «Отменить». Синхронный вызов (существующие тесты, отладка)
+    передает ``None``, и поведение функции не меняется ни на шаг.
+    """
+    progress = progress or ProgressReporter(None)
+    progress.stage("load")
     task = task_service.get_task(task_id)
     env = environment_service.get_environment(task.environment_id)
     if env.status != "Корректна":
         raise PlanInfeasibleError("обстановка задачи содержит ошибки и недоступна для расчета")
 
-    model_key, camera_key, instances = _pick_model_group(task.survey_type)
+    progress.stage("model")
+    model_key, camera_key, instances = _pick_model_group(
+        task.survey_type, fleet_service.eligible_instances()
+    )
     model = FLEET_MODELS[model_key]
 
+    progress.stage("survey_geometry")
     try:
         survey_geometry = plan_survey_geometry(model_key, camera_key, task.gsd_cm)
     except CameraError as exc:
@@ -188,6 +208,7 @@ def create_plan(task_id: str) -> PlanSummary:
         for i, f in enumerate(obstacle_feats)
     ]
 
+    progress.stage("working_area")
     validate_polygon(area_geom)
     area_utm = projector.to_utm(area_geom)
     try:
@@ -200,11 +221,15 @@ def create_plan(task_id: str) -> PlanSummary:
     if working_area.is_empty:
         raise PlanInfeasibleError("рабочая область пуста на высоте съемки — нет свободного места для галсов")
 
+    progress.stage("decomposition")
     cells = boustrophedon_cells(working_area)
     max_route_m = model.max_route_km * 1000.0 if model.max_route_km else float("inf")
 
+    # Первый из двух циклов, съедающих время на большой сцене, — отсюда и
+    # берется гранулярность прогресса, без правок внутри coverage.
     raw_tracks: list[LineString] = []
-    for cell in cells:
+    for cell_index, cell in enumerate(cells):
+        progress.span("tracks", cell_index, len(cells), TRACKS_SPAN)
         for track in generate_tracks(cell, survey_geometry.track_spacing_m):
             raw_tracks.extend(split_long_track(track, max_route_m))
 
@@ -222,6 +247,7 @@ def create_plan(task_id: str) -> PlanSummary:
     cruise_speed = max(model.speed_ms.max_ms - wind_speed, MIN_EFFECTIVE_SPEED_MPS)
     budget_s = flight_time_budget_s(model)
 
+    progress.stage("assignment")
     vehicles = [Vehicle(id=inst.inventory_number, speed_mps=cruise_speed, budget_s=budget_s) for inst in instances]
     track_objs = [Track(id=f"track-{i}", geometry=t) for i, t in enumerate(raw_tracks)]
     routing_result = greedy_assign_and_split(track_objs, vehicles)
@@ -235,7 +261,9 @@ def create_plan(task_id: str) -> PlanSummary:
     plan_start: datetime | None = None
     plan_end: datetime | None = None
 
-    for vehicle in vehicles:
+    # Второй длинный цикл — по бортам; здесь же живет проверка отмены.
+    for vehicle_index, vehicle in enumerate(vehicles):
+        progress.span("schedule", vehicle_index, len(vehicles), SCHEDULE_SPAN)
         sorties = routing_result.sorties_by_vehicle.get(vehicle.id, [])
         try:
             scheduled = assign_timestamps(
@@ -279,6 +307,7 @@ def create_plan(task_id: str) -> PlanSummary:
             "(превышают бюджет вылета любого кандидата) — увеличьте состав группы или используйте другую модель"
         )
 
+    progress.stage("save")
     plan_id = str(uuid.uuid4())
     version = repositories.plans.next_version(task.id)
     detail = PlanDetail(
@@ -313,3 +342,8 @@ def list_plans(task_id: str) -> list[PlanSummary]:
 
 def get_plan(plan_id: str) -> PlanDetail:
     return repositories.plans.get(plan_id)
+
+
+def get_plan_summary(plan_id: str) -> PlanSummary:
+    """Карточка плана без вылетов — то, что отдает ответ на запуск расчета."""
+    return _to_summary(repositories.plans.get(plan_id))

@@ -25,6 +25,7 @@ from uav_planner.api.schemas.environment import (
     ValidationIssue,
 )
 from uav_planner.api.schemas.fleet import FleetDetail, FleetInstance, FleetIssue
+from uav_planner.api.schemas.job import JobInfo
 from uav_planner.api.schemas.plan import PlanDetail, PlanSortie
 from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport
 from uav_planner.api.schemas.task import TaskDetail
@@ -37,6 +38,7 @@ from uav_planner.models.environment import (
 from uav_planner.models.fleet import FleetInstance as FleetInstanceRow
 from uav_planner.models.fleet import FleetIssue as FleetIssueRow
 from uav_planner.models.fleet import FleetUpload
+from uav_planner.models.job import PlanJob as PlanJobRow
 from uav_planner.models.plan import Plan, PlanSortie as PlanSortieRow
 from uav_planner.models.safety import SafetyCheck as SafetyCheckRow
 from uav_planner.models.safety import SafetyReport as SafetyReportRow
@@ -361,4 +363,25 @@ def safety_report_from_row(row: SafetyReportRow) -> SafetyReport:
             )
             for c in sorted(row.checks, key=lambda c: c.ordinal)
         ],
+    )
+
+
+def job_from_row(row: PlanJobRow) -> JobInfo:
+    return JobInfo(
+        id=str(row.id),
+        task_id=str(row.task_id),
+        kind=row.kind,
+        status=row.status,
+        stage=row.stage,
+        progress=row.progress,
+        error=row.error,
+        error_code=row.error_code,
+        cancel_requested=row.cancel_requested,
+        plan_id=str(row.plan_id) if row.plan_id else None,
+        result_plan_id=str(row.result_plan_id) if row.result_plan_id else None,
+        result_report_id=str(row.result_report_id) if row.result_report_id else None,
+        auto_recalc_count=row.auto_recalc_count,
+        queued_at=row.queued_at,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
     )

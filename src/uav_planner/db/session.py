@@ -117,6 +117,41 @@ def session_scope() -> Iterator[Session]:
         session.close()
 
 
+@contextmanager
+def short_session_scope(bind: bool = False) -> Iterator[Session]:
+    """Короткая транзакция, не вложенная в транзакцию вызывающего.
+
+    Нужна публикации прогресса фонового расчета: она обязана коммитить сразу,
+    иначе ни статус, ни процент не видны снаружи до конца работы, а работа
+    идет до 30 минут. ``session_scope`` для этого не годится — он намеренно
+    переиспользует уже привязанную сессию и не коммитит ее.
+
+    Тонкость тестов: в eager-режиме Celery фабрика сессий подменена и отдает
+    ту же сессию, что у теста. Закрывать ее здесь нельзя — тогда тест потеряет
+    соединение; ``commit()`` на ней — это release savepoint, и внешняя
+    транзакция теста по-прежнему откатывается целиком.
+
+    ``bind=True`` на время блока подменяет сессию контекста — это нужно тем,
+    кто внутри зовет репозитории (например, опрос статуса работы в теле
+    HTTP-запроса: сессия запроса живет в своем снимке и коммитов воркера не
+    увидит).
+    """
+    session = get_session_factory()()
+    borrowed = session is _current_session.get()
+    token = _current_session.set(session) if bind and not borrowed else None
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        if token is not None:
+            _current_session.reset(token)
+        if not borrowed:
+            session.close()
+
+
 def get_session() -> Iterator[Session]:
     """Зависимость FastAPI для точечного доступа к сессии в роутере."""
     with session_scope() as session:

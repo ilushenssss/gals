@@ -8,9 +8,9 @@
 
 from uav_planner.db.session import current_session
 
-from .sql import environments, fleet, plans, safety, tasks
+from .sql import environments, fleet, jobs, plans, safety, tasks
 
-__all__ = ["environments", "fleet", "plans", "safety", "tasks", "reset_all"]
+__all__ = ["environments", "fleet", "jobs", "plans", "safety", "tasks", "reset_all"]
 
 
 def reset_all() -> None:

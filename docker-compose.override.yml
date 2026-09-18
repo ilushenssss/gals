@@ -33,3 +33,12 @@ services:
     volumes:
       - ./migrations:/app/migrations
       - ./src:/app/src
+
+  # Celery не умеет --reload; код монтируется, чтобы правка подхватывалась
+  # обычным docker compose restart worker, без пересборки образа.
+  worker:
+    environment:
+      GALS_DEBUG: "true"
+      GALS_ENV: dev
+    volumes:
+      - ./src:/app/src

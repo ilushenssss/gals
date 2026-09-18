@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # --- очередь -----------------------------------------------------------
     redis_url: str = "redis://redis:6379/0"
     celery_broker_url: str = ""  # пусто -> redis_url
+    celery_queue: str = "gals"
+    # Выполнять фоновые задачи прямо в вызывающем потоке, без брокера. Нужен
+    # тестам (см. tests/conftest.py) и отладке без Redis; в compose всегда
+    # false, иначе получасовой расчет исполнится внутри HTTP-запроса.
+    celery_task_always_eager: bool = False
 
     # --- HTTP --------------------------------------------------------------
     # Фронтенд и API ходят через один origin (nginx / Vite dev-proxy), поэтому
