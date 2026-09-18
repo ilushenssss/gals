@@ -1,10 +1,92 @@
+# Полный запуск сервиса «Галс»: docker compose up --build
+#
+# Состав растет по мере реализации плана обертки: сейчас поднимаются db,
+# redis, одноразовый накат миграций и api (он же пока отдает фронтенд).
+# Дальше добавятся worker/beat (фоновый расчет) и web (SPA за nginx).
+
 services:
-  # Сейчас один процесс отдает и API, и статический фронтенд (см. api/app.py).
-  # Отдельные worker (фоновый расчет) и db (PostgreSQL) — по мере реализации
-  # модулей routing/plan (см. docs/code/uav_planner_kanban.html, карточка
-  # "docker compose: ui / api / worker / db").
+  db:
+    # На Apple Silicon образ postgis/postgis только amd64 и идет через эмуляцию.
+    # Для нативного arm64 положить в .env: POSTGIS_IMAGE=imresamu/postgis:16-3.4
+    image: ${POSTGIS_IMAGE:-postgis/postgis:16-3.4}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gals}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gals}
+      POSTGRES_DB: ${POSTGRES_DB:-gals}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -h 127.0.0.1 обязательно: во время initdb postgres слушает только
+      # unix-сокет, и проверка без TCP успевает сказать "healthy" до того,
+      # как сервер перезапустится и начнет принимать соединения по сети —
+      # тогда migrate стартует слишком рано и падает с connection refused.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", ""]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Отдельный одноразовый сервис, а не entrypoint приложения: при нескольких
+  # репликах api/worker entrypoint означал бы гонку за alembic-лок на старте.
+  # Здесь миграции накатываются ровно один раз, и если они падают — не
+  # стартует ничего, что видно сразу по коду выхода.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      GALS_ENV: ${GALS_ENV:-dev}
+      GALS_DEBUG: ${GALS_DEBUG:-false}
+      GALS_LOG_LEVEL: ${GALS_LOG_LEVEL:-INFO}
+      GALS_DATABASE_URL: ${GALS_DATABASE_URL:-postgresql+psycopg://gals:gals@db:5432/gals}
+      GALS_REDIS_URL: ${GALS_REDIS_URL:-redis://redis:6379/0}
+      GALS_SERVE_STATIC: ${GALS_SERVE_STATIC:-true}
+      GALS_PLAN_SYNC_WAIT_SECONDS: ${GALS_PLAN_SYNC_WAIT_SECONDS:-30}
+      GALS_PLAN_TIME_LIMIT_S: ${GALS_PLAN_TIME_LIMIT_S:-1800}
+      GALS_EXPORT_DIR: /data/exports
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build: .
-    ports:
-      - "8000:8000"
+    command:
+      ["uvicorn", "uav_planner.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      GALS_ENV: ${GALS_ENV:-dev}
+      GALS_DEBUG: ${GALS_DEBUG:-false}
+      GALS_LOG_LEVEL: ${GALS_LOG_LEVEL:-INFO}
+      GALS_DATABASE_URL: ${GALS_DATABASE_URL:-postgresql+psycopg://gals:gals@db:5432/gals}
+      GALS_REDIS_URL: ${GALS_REDIS_URL:-redis://redis:6379/0}
+      GALS_SERVE_STATIC: ${GALS_SERVE_STATIC:-true}
+      GALS_PLAN_SYNC_WAIT_SECONDS: ${GALS_PLAN_SYNC_WAIT_SECONDS:-30}
+      GALS_PLAN_TIME_LIMIT_S: ${GALS_PLAN_TIME_LIMIT_S:-1800}
+      GALS_EXPORT_DIR: /data/exports
+    volumes:
+      - exports:/data/exports
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  exports:

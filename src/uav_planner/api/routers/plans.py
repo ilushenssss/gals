@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Form, HTTPException
 
-from . import plan_service
-from .plan_models import PlanDetail, PlanSummary
-from .plan_service import PlanInfeasibleError
+from uav_planner.services import plan_service
+from uav_planner.api.schemas.plan import PlanDetail, PlanSummary
+from uav_planner.services.plan_service import PlanInfeasibleError
 
 router = APIRouter(prefix="/api", tags=["plans"])
 

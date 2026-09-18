@@ -6,8 +6,8 @@ import json
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from . import service
-from .models import EnvironmentDetail, EnvironmentSummary
+from uav_planner.services import environment_service as service
+from uav_planner.api.schemas.environment import EnvironmentDetail, EnvironmentSummary
 
 router = APIRouter(prefix="/api", tags=["environments"])
 

@@ -12,13 +12,14 @@ from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
+from uav_planner import repositories
+from uav_planner.domain.errors import ConflictError, ValidationError
 from uav_planner.geometry import GeometryError, Projector, validate_polygon
 from uav_planner.schedule import daylight_window_utc_hours
 
-from . import service as environment_service
-from .task_models import SURVEY_TYPES, TaskDetail, TaskSummary, TaskValidationIssue
+from . import environment_service
+from uav_planner.api.schemas.task import SURVEY_TYPES, TaskDetail, TaskSummary, TaskValidationIssue
 
-_tasks: dict[str, TaskDetail] = {}
 
 _SUMMARY_ONLY_EXCLUDE = {
     "gsd_cm", "window_start", "window_end", "wind_speed_ms",
@@ -26,17 +27,17 @@ _SUMMARY_ONLY_EXCLUDE = {
 }
 
 
-class TaskValidationError(ValueError):
+class TaskValidationError(ValidationError):
     def __init__(self, issues: list[TaskValidationIssue]):
         super().__init__("; ".join(f"{i.field}: {i.message}" for i in issues))
         self.issues = issues
 
 
-class TaskConflictError(Exception):
+class TaskConflictError(ConflictError):
     """ЗАД.ФТ.12: версия задачи в хранилище не совпадает с ожидаемой."""
 
 
-class TaskNotEditableError(ValueError):
+class TaskNotEditableError(ConflictError, ValueError):
     """Редактировать нельзя задачу в статусе «Подтверждена» (план уже подтвержден
     и неизменен, см. ЭКС.ФТ.3) — только «Черновик» и «Рассчитана»."""
 
@@ -174,7 +175,7 @@ def create_task(
         cloud_cover_pct=cloud_cover_pct, criterion_mode=criterion_mode, criterion_alpha=alpha,
         area=area_geojson,
     )
-    _tasks[task_id] = detail
+    repositories.tasks.put(task_id, detail)
     return _to_summary(detail)
 
 
@@ -195,7 +196,7 @@ def update_task(
     area_geojson: dict[str, Any],
 ) -> TaskSummary:
     """ЗАД.ФТ.9-10 (редактирование) + ЗАД.ФТ.12 (оптимистичная блокировка версии)."""
-    existing = _tasks[task_id]  # KeyError -> 404 в routes
+    existing = repositories.tasks.get(task_id)  # KeyError -> 404 в routes
 
     if existing.status == "Подтверждена":
         raise TaskNotEditableError("план по этой задаче подтвержден — редактирование недоступно")
@@ -220,23 +221,25 @@ def update_task(
         "cloud_cover_pct": cloud_cover_pct, "criterion_mode": criterion_mode,
         "criterion_alpha": alpha, "area": area_geojson,
     })
-    _tasks[task_id] = updated
+    repositories.tasks.put(task_id, updated)
     return _to_summary(updated)
 
 
 def mark_calculated(task_id: str) -> None:
     """Вызывается модулем «Планирование» после успешного расчета плана (ПЛН.ФТ.5)."""
-    existing = _tasks[task_id]
-    _tasks[task_id] = existing.model_copy(update={"status": "Рассчитана", "updated_at": datetime.now(timezone.utc)})
+    existing = repositories.tasks.get(task_id)
+    repositories.tasks.put(
+        task_id,
+        existing.model_copy(update={"status": "Рассчитана", "updated_at": datetime.now(timezone.utc)}),
+    )
 
 
 def list_tasks(environment_id: str | None = None) -> list[TaskSummary]:
-    tasks = _tasks.values()
-    if environment_id is not None:
-        tasks = [t for t in tasks if t.environment_id == environment_id]
-    ordered = sorted(tasks, key=lambda t: t.updated_at, reverse=True)
-    return [_to_summary(t) for t in ordered]
+    return [
+        _to_summary(t)
+        for t in repositories.tasks.list_by_environment(environment_id)
+    ]
 
 
 def get_task(task_id: str) -> TaskDetail:
-    return _tasks[task_id]
+    return repositories.tasks.get(task_id)

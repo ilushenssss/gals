@@ -3,43 +3,6 @@
 import io
 import json
 
-import pytest
-from fastapi.testclient import TestClient
-
-from uav_planner.api.app import app
-from uav_planner.api import (
-    fleet_service,
-    plan_service,
-    safety_service,
-    service as environment_service,
-    task_service,
-)
-
-
-@pytest.fixture(autouse=True)
-def _clear_stores():
-    environment_service._store.clear()
-    task_service._tasks.clear()
-    fleet_service._fleet = None
-    plan_service._plans.clear()
-    plan_service._plan_ids_by_task.clear()
-    safety_service._reports_by_plan.clear()
-    safety_service._attempts_by_task_version.clear()
-    yield
-    environment_service._store.clear()
-    task_service._tasks.clear()
-    fleet_service._fleet = None
-    plan_service._plans.clear()
-    plan_service._plan_ids_by_task.clear()
-    safety_service._reports_by_plan.clear()
-    safety_service._attempts_by_task_version.clear()
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
-
-
 def square_coords(x0, y0, w, h):
     return [[[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h], [x0, y0]]]
 

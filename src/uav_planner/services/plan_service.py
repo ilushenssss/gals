@@ -35,6 +35,8 @@ from shapely.geometry import LineString, MultiLineString, Point, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
+from uav_planner import repositories
+from uav_planner.domain.errors import PlanInfeasibleError as _DomainPlanInfeasibleError
 from uav_planner.camera import CAMERA_SPECS, CameraError, plan_survey_geometry
 from uav_planner.coverage import boustrophedon_cells, generate_tracks, split_long_track
 from uav_planner.fleet import FLEET_MODELS, flight_time_budget_s
@@ -52,12 +54,10 @@ from uav_planner.routing import Track, Vehicle, greedy_assign_and_split
 from uav_planner.schedule import ScheduleError, assign_timestamps
 
 from . import fleet_service
-from . import service as environment_service
+from . import environment_service
 from . import task_service
-from .plan_models import PlanDetail, PlanSortie, PlanSummary
+from uav_planner.api.schemas.plan import PlanDetail, PlanSortie, PlanSummary
 
-_plans: dict[str, PlanDetail] = {}
-_plan_ids_by_task: dict[str, list[str]] = {}
 
 SPECTRUM_BY_SURVEY_TYPE = {
     "RGB": "rgb",
@@ -71,7 +71,7 @@ MIN_EFFECTIVE_SPEED_MPS = 1.0
 _SUMMARY_ONLY_EXCLUDE = {"sorties"}
 
 
-class PlanInfeasibleError(ValueError):
+class PlanInfeasibleError(_DomainPlanInfeasibleError):
     """Задачу невозможно рассчитать в текущем виде (ПЛН.ФТ.10)."""
 
 
@@ -280,11 +280,11 @@ def create_plan(task_id: str) -> PlanSummary:
         )
 
     plan_id = str(uuid.uuid4())
-    versions = _plan_ids_by_task.setdefault(task.id, [])
+    version = repositories.plans.next_version(task.id)
     detail = PlanDetail(
         id=plan_id,
         task_id=task.id,
-        version=len(versions) + 1,
+        version=version,
         created_at=datetime.now(timezone.utc),
         criterion_mode=task.criterion_mode,
         criterion_alpha=task.criterion_alpha,
@@ -302,16 +302,14 @@ def create_plan(task_id: str) -> PlanSummary:
         budget_s=budget_s,
         sorties=plan_sorties,
     )
-    _plans[plan_id] = detail
-    versions.append(plan_id)
+    repositories.plans.add(detail)
     task_service.mark_calculated(task.id)
     return _to_summary(detail)
 
 
 def list_plans(task_id: str) -> list[PlanSummary]:
-    ids = _plan_ids_by_task.get(task_id, [])
-    return [_to_summary(_plans[i]) for i in reversed(ids)]
+    return [_to_summary(p) for p in repositories.plans.list_by_task_newest_first(task_id)]
 
 
 def get_plan(plan_id: str) -> PlanDetail:
-    return _plans[plan_id]
+    return repositories.plans.get(plan_id)

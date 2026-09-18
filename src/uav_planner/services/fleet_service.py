@@ -15,11 +15,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from uav_planner import repositories
 from uav_planner.fleet import FLEET_MODELS, READINESS_STATUSES
 
-from .fleet_models import FleetDetail, FleetInstance, FleetIssue, FleetSummary
+from uav_planner.api.schemas.fleet import FleetDetail, FleetInstance, FleetIssue, FleetSummary
 
-_fleet: FleetDetail | None = None
 
 
 def _parse_records(raw: bytes) -> list[dict[str, Any]]:
@@ -94,19 +94,20 @@ def validate_and_store(raw: bytes) -> FleetSummary:
         instances=instances,
     )
 
-    global _fleet
-    _fleet = detail
+    repositories.fleet.set_current(detail)
     return _to_summary(detail)
 
 
 def get_fleet() -> FleetDetail:
-    if _fleet is None:
+    fleet = repositories.fleet.get_current()
+    if fleet is None:
         raise KeyError("парк БВС не загружен")
-    return _fleet
+    return fleet
 
 
 def eligible_instances() -> list[FleetInstance]:
     """ПБС.ФТ.4: экземпляры со статусом «Готов», допустимые как кандидаты на задачу."""
-    if _fleet is None:
+    fleet = repositories.fleet.get_current()
+    if fleet is None:
         return []
-    return [i for i in _fleet.instances if i.valid and i.status == "Готов"]
+    return [i for i in fleet.instances if i.valid and i.status == "Готов"]

@@ -7,9 +7,9 @@ from datetime import date, time
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from . import task_service
-from .task_models import TaskDetail, TaskSummary
-from .task_service import TaskConflictError, TaskNotEditableError, TaskValidationError
+from uav_planner.services import task_service
+from uav_planner.api.schemas.task import TaskDetail, TaskSummary
+from uav_planner.services.task_service import TaskConflictError, TaskNotEditableError, TaskValidationError
 
 router = APIRouter(prefix="/api", tags=["tasks"])
 

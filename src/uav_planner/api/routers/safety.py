@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Form, HTTPException
 
-from . import safety_service
-from .safety_models import SafetyReport
-from .safety_service import SafetyCheckError
+from uav_planner.services import safety_service
+from uav_planner.api.schemas.safety import SafetyReport
+from uav_planner.services.safety_service import SafetyCheckError
 
 router = APIRouter(prefix="/api", tags=["safety"])
 

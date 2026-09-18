@@ -1,8 +1,9 @@
 """Импорт и проверка обстановки — реализация ОБС.ФТ.2, ОБС.ФТ.3, ОБС.ФТ.4, ОБС.ФТ.8, ОБС.ФТ.9.
 
-См. docs/trebovania/Обстановка.md. Хранилище — в памяти процесса (для первой
-версии интерфейса этого достаточно; после перезапуска сервера обстановки нужно
-загрузить заново).
+См. docs/trebovania/Обстановка.md. Доступ к хранилищу — через
+``uav_planner.repositories``; его текущая реализация держит данные в памяти
+процесса (после перезапуска сервера обстановки нужно загрузить заново) и
+заменяется на PostGIS без изменений в этом модуле.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from shapely.geometry import mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
+from uav_planner import repositories
 from uav_planner.geometry import (
     GeometryError,
     HeightRange,
@@ -24,13 +26,12 @@ from uav_planner.geometry import (
     validate_polygon,
 )
 
-from .models import EnvironmentDetail, EnvironmentSummary, LayerCounts, ValidationIssue
+from uav_planner.api.schemas.environment import EnvironmentDetail, EnvironmentSummary, LayerCounts, ValidationIssue
 
 LAYER_TYPES = ("launch_site", "airspace", "no_fly", "obstacle", "reserve_site")
 POLYGON_LAYERS = ("airspace", "no_fly", "obstacle")
 POINT_LAYERS = ("launch_site", "reserve_site")
 
-_store: dict[str, EnvironmentDetail] = {}
 
 
 def _parse_time_windows(raw: Any) -> list[TimeWindow] | None:
@@ -176,16 +177,16 @@ def validate_and_store(geojson: dict, name: str) -> EnvironmentSummary:
         errors=errors,
         layers=groups,
     )
-    _store[env_id] = detail
+    repositories.environments.put(env_id, detail)
     return EnvironmentSummary(**detail.model_dump(exclude={"layers"}))
 
 
 def list_environments() -> list[EnvironmentSummary]:
     return [
         EnvironmentSummary(**env.model_dump(exclude={"layers"}))
-        for env in sorted(_store.values(), key=lambda e: e.uploaded_at, reverse=True)
+        for env in repositories.environments.list_newest_first()
     ]
 
 
 def get_environment(environment_id: str) -> EnvironmentDetail:
-    return _store[environment_id]
+    return repositories.environments.get(environment_id)

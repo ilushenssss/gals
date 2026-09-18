@@ -3,25 +3,6 @@
 import io
 import json
 
-import pytest
-from fastapi.testclient import TestClient
-
-from uav_planner.api.app import app
-from uav_planner.api import service
-
-
-@pytest.fixture(autouse=True)
-def _clear_store():
-    service._store.clear()
-    yield
-    service._store.clear()
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
-
-
 def _upload(client, geojson: dict, name: str = "Тестовая сцена"):
     data = json.dumps(geojson).encode("utf-8")
     return client.post(

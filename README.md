@@ -35,20 +35,93 @@
 
 ```
 main/
+  docker-compose.yml           # полный запуск: db, redis, migrate, api
+  docker-compose.override.yml  # dev-надстройка (bind-mount кода, --reload, порты наружу)
+  Dockerfile                   # один образ на роли api / worker / migrate
+  alembic.ini, migrations/     # схема БД
   pyproject.toml
   src/uav_planner/
-    geometry/        # проекции, рабочая область, буферы (см. ниже)
+    config.py        # настройки (pydantic-settings, префикс GALS_)
+    domain/          # общий словарь: ошибки предметной области
+    db/              # движок, сессия запроса, конверсия shapely <-> PostGIS
+    models/          # ORM-модели (12 таблиц, см. «Хранилище» ниже)
+    repositories/    # единственное место, знающее, где лежат данные
+    services/        # правила модулей ТЗ и оркестрация вызовов математики
+    api/
+      app.py         # фабрика create_app(settings)
+      routers/       # HTTP: разбор запроса, коды ответов
+      schemas/       # pydantic-схемы запросов и ответов
+      static/        # текущий фронтенд (до появления SPA в web/)
+    geometry/ camera/ coverage/ routing/ fleet/ safety/ schedule/
+                     # чистая математика: ни HTTP, ни БД, ни глобального состояния
   tests/
 ```
 
+Слои разделены так: роутеры знают про HTTP, сервисы — про требования модулей,
+репозитории — про хранилище, математика не знает ни о чем из этого. Поэтому
+замена хранилища или способа запуска расчета не затрагивает формулы.
+
 ## Запуск
 
+### Через docker compose (основной способ)
+
 ```bash
-cd main
+docker compose up --build
+```
+
+Поднимает `db` (PostGIS), `redis`, одноразовый `migrate` (`alembic upgrade head`)
+и `api`. Ничего ставить на хост не нужно. Интерфейс — `http://127.0.0.1:8000/`,
+OpenAPI — `/docs`, проверки состояния — `/api/health` (liveness) и
+`/api/health/ready` (БД и Redis). Если порт 8000 или 55432 на машине занят:
+`API_PORT=8001 DB_PORT=55433 docker compose up`. Настройки — переменные с
+префиксом `GALS_`, см. `.env.example` (файл необязателен: у compose есть
+значения по умолчанию).
+
+Холодный старт с нуля: `docker compose down -v && docker compose up --build`.
+
+### Хранилище
+
+Данные лежат в PostgreSQL с PostGIS: обстановки с объектами по слоям, парк БВС,
+задачи, версии планов с вылетами, отчеты проверки безопасности. Схема — в
+`migrations/`, накатывается сервисом `migrate` при запуске compose.
+
+Геометрия загруженных данных (объекты обстановки, область задачи) хранится
+дважды: сырой GeoJSON в `jsonb` — это то, что возвращает API, вместе со
+служебными свойствами `_valid`/`_buffer_geojson` и любыми полями из файла
+оператора; и `geometry(...,4326)` — индексируемая копия для пространственных
+запросов. Круг через PostGIS нормализует геометрию (теряет обертку Feature и
+негеометрические члены), поэтому отдавать наружу нормализованную копию нельзя.
+Маршруты и галсы вылетов, наоборот, порождаются нами, поэтому хранятся только
+как geometry и читаются через shapely — не через `ST_AsGeoJSON`, который
+обрезает координаты до девяти знаков.
+
+Проверено: данные переживают `docker compose restart api` (обстановка, задача,
+все версии планов с геометрией маршрутов и отчеты проверки на месте), а
+автопересчет при нарушении по-прежнему создает версии 2-4 и один отчет на семь
+критериев.
+
+### Локально, без Docker
+
+```bash
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -e ".[dev]"   # Windows
-# source .venv/bin/activate && pip install -e ".[dev]"  # Linux/macOS
-.venv/Scripts/python.exe -m pytest -v
+.venv/bin/pip install -e ".[dev]"      # Linux/macOS
+# .venv/Scripts/python.exe -m pip install -e ".[dev]"   # Windows
+.venv/bin/python -m pytest -q
+```
+
+Тестам нужен настоящий PostGIS (в схеме geometry-колонки и частичные индексы,
+SQLite не подходит). База берется из `GALS_TEST_DATABASE_URL`, иначе
+поднимается контейнером через testcontainers; если нет ни того, ни другого —
+тесты с пометкой `db` пропускаются, а 103 теста чистой математики идут как
+обычно (`pytest -m "not db"` — быстрый цикл без Docker вовсе).
+
+База для тестов обязана быть отдельной от рабочей: изоляция теста — откат
+транзакции, и он не уберет данные, которые в базу положило работающее
+приложение. Создать один раз:
+
+```bash
+docker compose exec db psql -U gals -d postgres -c 'CREATE DATABASE gals_test OWNER gals;'
+export GALS_TEST_DATABASE_URL=postgresql+psycopg://gals:gals@127.0.0.1:55432/gals_test
 ```
 
 ### Веб-интерфейс (первая версия)
@@ -85,20 +158,21 @@ python -m venv .venv
   рассчитать план по задаче: несколько готовых экземпляров одной модели (Gemini, 801)
   позволяют увидеть распределение галсов между двумя-тремя БВС, а не одним.
 
-```bash
-cd main
-docker compose up --build
-```
-
-Открыть `http://127.0.0.1:8000/` — тот же интерфейс, без установки Python/зависимостей на
-хост. `Dockerfile` собирает `uav-planner` обычным (не editable) `pip install .` — поэтому
+О сборке образа: `Dockerfile` ставит пакет обычным (не editable) `pip install .`, поэтому
 статика фронтенда объявлена как `package-data` в `pyproject.toml` (`uav_planner.api` →
-`static/*`), иначе non-editable сборка потеряла бы `static/index.html`. Сейчас в
-`docker-compose.yml` один сервис `api` (отдает и API, и статический фронтенд одним
-процессом); отдельные `worker` (фоновый расчет) и `db` (PostgreSQL) появятся по мере
-реализации модулей `routing`/`plan` — см. карточку канбана «docker compose: ui / api /
-worker / db». Проверено: реальная сборка и запуск контейнера, `curl` до `/`, `/openapi.json`
-и полный цикл `POST /api/environments` → `GET /api/environments/{id}` изнутри контейнера.
+`static/*`) — иначе non-editable сборка потеряла бы `static/index.html`. Образ
+многостадийный и запускается от непривилегированного пользователя; один и тот же образ
+используется тремя сервисами compose (`api`, `migrate` и — по мере реализации фонового
+расчета — `worker`), различается только команда.
+
+Проверено вживую: холодный старт `docker compose down -v && docker compose up --build`,
+`migrate` завершается кодом 0 и накатывает `alembic_version = 0001` с расширениями
+`postgis`/`pgcrypto`, `/api/health/ready` отдает `{"database":"ok","redis":"ok"}`, а полный
+цикл `POST /api/environments` → `POST /api/fleet` проходит изнутри контейнера на файлах из
+`examples/`.
+
+Отдельные `worker` (фоновый расчет с отменой и прогрессом) и `web` (SPA за nginx) —
+следующие шаги обертки.
 
 ## Реализовано
 

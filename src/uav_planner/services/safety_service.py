@@ -18,6 +18,8 @@ from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
+from uav_planner import repositories
+from uav_planner.domain.errors import GalsError
 from uav_planner.geometry import (
     AllowedZone,
     GeometryError,
@@ -40,10 +42,10 @@ from uav_planner.safety import (
 )
 
 from . import plan_service
-from . import service as environment_service
+from . import environment_service
 from . import task_service
-from .plan_models import PlanDetail
-from .safety_models import SafetyCheckOut, SafetyReport
+from uav_planner.api.schemas.plan import PlanDetail
+from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport
 
 MAX_AUTO_RECALC = 3
 
@@ -57,11 +59,9 @@ _LABELS = {
     "separation": "Разведение",
 }
 
-_reports_by_plan: dict[str, list[SafetyReport]] = {}
-_attempts_by_task_version: dict[tuple[str, int], int] = {}
 
 
-class SafetyCheckError(ValueError):
+class SafetyCheckError(GalsError, ValueError):
     """Проверку невозможно выполнить (например, план ссылается на удаленную обстановку)."""
 
 
@@ -209,9 +209,7 @@ def _store_report(original_plan_id: str, plan: PlanDetail, task, checks: list[Sa
         created_at=datetime.now(timezone.utc), status=_status_of(checks),
         checks=checks, auto_recalc_count=attempts,
     )
-    _reports_by_plan.setdefault(original_plan_id, []).append(report)
-    if plan.id != original_plan_id:
-        _reports_by_plan.setdefault(plan.id, []).append(report)
+    repositories.safety.add_report([original_plan_id, plan.id], report)
     return report
 
 
@@ -232,13 +230,12 @@ def check_plan(plan_id: str) -> SafetyReport:
     """
     original_plan_id = plan_id
     plan, task, env = _load_context(plan_id)
-    key = (task.id, task.version)
-    attempts = _attempts_by_task_version.get(key, 0)
+    attempts = repositories.safety.get_attempts(task.id, task.version)
 
     checks = _run_checks(env, task, plan)
     while _status_of(checks) == "Есть нарушения" and attempts < MAX_AUTO_RECALC:
         attempts += 1
-        _attempts_by_task_version[key] = attempts
+        repositories.safety.set_attempts(task.id, task.version, attempts)
         new_summary = plan_service.create_plan(task.id)
         plan = plan_service.get_plan(new_summary.id)
         checks = _run_checks(env, task, plan)
@@ -253,13 +250,12 @@ def recheck_plan(plan_id: str) -> SafetyReport:
     саму задачу и не запуская новый расчет)."""
     plan, task, env = _load_context(plan_id)
     checks = _run_checks(env, task, plan)
-    key = (task.id, task.version)
-    attempts = _attempts_by_task_version.get(key, 0)
+    attempts = repositories.safety.get_attempts(task.id, task.version)
     return _store_report(plan_id, plan, task, checks, attempts)
 
 
 def get_latest_report(plan_id: str) -> SafetyReport:
-    reports = _reports_by_plan.get(plan_id)
-    if not reports:
+    report = repositories.safety.latest_report(plan_id)
+    if report is None:
         raise KeyError(f"для плана {plan_id} еще не выполнялась проверка безопасности")
-    return reports[-1]
+    return report

@@ -6,8 +6,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from uav_planner.fleet import FLEET_MODELS
 
-from . import fleet_service
-from .fleet_models import FleetDetail, FleetSummary, ModelSpecOut
+from uav_planner.services import fleet_service
+from uav_planner.api.schemas.fleet import FleetDetail, FleetSummary, ModelSpecOut
 
 router = APIRouter(prefix="/api", tags=["fleet"])
 
