@@ -24,6 +24,10 @@ class FleetInstance(BaseModel):
     model_key: str
     model_name: str
     base_launch_site: Optional[str] = None
+    # Текущее местоположение экземпляра (WGS-84) — разные БВС одного парка могут
+    # базироваться на разных площадках, не только на той, что выбрана в задаче.
+    location_lat: Optional[float] = None
+    location_lon: Optional[float] = None
     status: str
     valid: bool
     error: Optional[str] = None

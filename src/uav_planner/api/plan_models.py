@@ -8,6 +8,18 @@ from typing import Any, Optional
 from pydantic import BaseModel
 
 
+class PlanSortiePhase(BaseModel):
+    """Один этап вылета (взлет и перелет до зоны, конкретный галс, переход
+    между галсами, возврат и посадка) с собственным интервалом времени —
+    раскрывается по клику на пункт расписания на Экране 4 (ИНТ.ФТ.15)."""
+
+    label: str
+    kind: str  # "transit" | "survey"
+    start_utc: datetime
+    end_utc: datetime
+    distance_m: float
+
+
 class PlanSortie(BaseModel):
     uav_id: str
     sortie_index: int
@@ -19,6 +31,7 @@ class PlanSortie(BaseModel):
     distance_m: float
     track_geojson: dict[str, Any]  # LineString, WGS-84 — маршрут вылета целиком (галсы + переходы), для карты
     survey_tracks_geojson: dict[str, Any]  # MultiLineString, WGS-84 — только галсы, без переходов (для проверки покрытия)
+    phases: list[PlanSortiePhase] = []
 
 
 class PlanSummary(BaseModel):

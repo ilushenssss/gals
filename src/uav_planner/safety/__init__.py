@@ -4,6 +4,7 @@ from .checks import (
     DEFAULT_STEP_M,
     CheckResult,
     SortieTrack,
+    Violation,
     check_allowed_space,
     check_coverage,
     check_daylight,
@@ -17,6 +18,7 @@ from .checks import (
 __all__ = [
     "CheckResult",
     "SortieTrack",
+    "Violation",
     "discretize",
     "check_geozones",
     "check_allowed_space",

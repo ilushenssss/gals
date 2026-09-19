@@ -89,6 +89,53 @@ def test_missing_inventory_number_is_flagged(client):
     assert any("инвентарный номер" in e["message"] for e in body["errors"])
 
 
+def test_location_is_stored_when_valid(client):
+    resp = _upload_json(client, [
+        {"inventory_number": "201-01", "model": "geoscan-201", "location_lat": 55.775, "location_lon": 37.60},
+    ])
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "Корректна"
+    detail = client.get("/api/fleet").json()
+    inst = detail["instances"][0]
+    assert inst["location_lat"] == pytest.approx(55.775)
+    assert inst["location_lon"] == pytest.approx(37.60)
+
+
+def test_missing_location_is_not_an_error(client):
+    resp = _upload_json(client, [{"inventory_number": "201-01", "model": "geoscan-201"}])
+    body = resp.json()
+    assert body["status"] == "Корректна"
+    detail = client.get("/api/fleet").json()
+    assert detail["instances"][0]["location_lat"] is None
+    assert detail["instances"][0]["location_lon"] is None
+
+
+def test_partial_location_is_flagged(client):
+    resp = _upload_json(client, [{"inventory_number": "201-01", "model": "geoscan-201", "location_lat": 55.775}])
+    body = resp.json()
+    assert body["status"] == "Содержит ошибки"
+    assert any("некорректная локация" in e["message"] for e in body["errors"])
+
+
+def test_out_of_range_location_is_flagged(client):
+    resp = _upload_json(client, [
+        {"inventory_number": "201-01", "model": "geoscan-201", "location_lat": 200.0, "location_lon": 37.60},
+    ])
+    body = resp.json()
+    assert body["status"] == "Содержит ошибки"
+    assert any("некорректная локация" in e["message"] for e in body["errors"])
+
+
+def test_non_numeric_location_is_flagged(client):
+    resp = _upload_json(client, [
+        {"inventory_number": "201-01", "model": "geoscan-201", "location_lat": "north", "location_lon": 37.60},
+    ])
+    body = resp.json()
+    assert body["status"] == "Содержит ошибки"
+    assert any("некорректная локация" in e["message"] for e in body["errors"])
+
+
 def test_csv_upload_is_supported(client):
     csv_text = "inventory_number,model,status,base_launch_site\n201-01,geoscan-201,Готов,ВПП-1\n"
     resp = client.post("/api/fleet", files={"file": ("fleet.csv", io.BytesIO(csv_text.encode("utf-8")), "text/csv")})
@@ -96,6 +143,20 @@ def test_csv_upload_is_supported(client):
     body = resp.json()
     assert body["status"] == "Корректна"
     assert body["total"] == 1
+
+
+def test_csv_upload_with_location(client):
+    csv_text = (
+        "inventory_number,model,location_lat,location_lon\n"
+        "201-01,geoscan-201,55.775,37.60\n"
+        "201-02,geoscan-201,,\n"  # локация не указана — не ошибка
+    )
+    resp = client.post("/api/fleet", files={"file": ("fleet.csv", io.BytesIO(csv_text.encode("utf-8")), "text/csv")})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "Корректна"
+    instances = client.get("/api/fleet").json()["instances"]
+    assert instances[0]["location_lat"] == pytest.approx(55.775)
+    assert instances[1]["location_lat"] is None
 
 
 def test_second_upload_replaces_first(client):

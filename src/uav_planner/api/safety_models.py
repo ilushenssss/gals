@@ -15,11 +15,20 @@ from pydantic import BaseModel
 Status = Literal["Пройдена", "Есть нарушения"]
 
 
+class ViolationOut(BaseModel):
+    message: str
+    # Координаты «опасного момента» в WGS-84 для отметки на карте (БЕЗ.ФТ.4 + подсветка
+    # при наведении, см. static/index.html) — отсутствуют, если для данного нарушения нет
+    # осмысленной единственной точки.
+    lat: float | None = None
+    lon: float | None = None
+
+
 class SafetyCheckOut(BaseModel):
     name: str
     label: str
     passed: bool
-    violations: list[str] = []
+    violations: list[ViolationOut] = []
 
 
 class SafetyReport(BaseModel):

@@ -3,7 +3,11 @@
 
 Формат файла — JSON-массив объектов или CSV с колонками: ``inventory_number``,
 ``model`` (ключ из справочника ``FLEET_MODELS``, например ``geoscan-201``),
-``base_launch_site`` (необязательно), ``status`` (``Готов`` по умолчанию).
+``base_launch_site`` (необязательно, название площадки как текст),
+``location_lat``/``location_lon`` (необязательно, WGS-84 — фактические
+координаты, где сейчас стоит экземпляр; разные БВС одного парка могут
+базироваться на разных площадках, это не привязано к обстановке задачи),
+``status`` (``Готов`` по умолчанию).
 """
 
 from __future__ import annotations
@@ -41,6 +45,23 @@ def _to_summary(detail: FleetDetail) -> FleetSummary:
     return FleetSummary(**detail.model_dump(exclude={"instances"}))
 
 
+def _parse_location(rec: dict[str, Any]) -> tuple[float | None, float | None, str | None]:
+    """Разбирает ``location_lat``/``location_lon`` — координаты не заданы
+    (оба поля пусты) — легитимно, экземпляр просто без известной локации;
+    заданы частично или не парсятся/вне диапазона — ошибка (не молчаливое
+    отбрасывание, тот же принцип, что и у прочих полей записи)."""
+    lat_raw, lon_raw = rec.get("location_lat"), rec.get("location_lon")
+    if lat_raw in (None, "") and lon_raw in (None, ""):
+        return None, None, None
+    try:
+        lat, lon = float(lat_raw), float(lon_raw)
+    except (TypeError, ValueError):
+        return None, None, "некорректная локация: широта/долгота должны быть числами"
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        return None, None, "некорректная локация: широта вне [-90, 90] или долгота вне [-180, 180]"
+    return lat, lon, None
+
+
 def validate_and_store(raw: bytes) -> FleetSummary:
     records = _parse_records(raw)
 
@@ -53,6 +74,7 @@ def validate_and_store(raw: bytes) -> FleetSummary:
         model_key = str(rec.get("model") or "").strip()
         base_site = (rec.get("base_launch_site") or None) or None
         status = str(rec.get("status") or "Готов").strip()
+        location_lat, location_lon, location_problem = _parse_location(rec)
 
         problems: list[str] = []
         if not inv:
@@ -69,12 +91,17 @@ def validate_and_store(raw: bytes) -> FleetSummary:
         if status not in READINESS_STATUSES:
             problems.append(f"недопустимый статус готовности «{status}»; допустимо: {', '.join(READINESS_STATUSES)}")
 
+        if location_problem:
+            problems.append(location_problem)
+
         valid = not problems
         instances.append(FleetInstance(
             inventory_number=inv,
             model_key=model_key,
             model_name=model.name if model else model_key,
             base_launch_site=base_site,
+            location_lat=location_lat,
+            location_lon=location_lon,
             status=status if status in READINESS_STATUSES else "Готов",
             valid=valid,
             error="; ".join(problems) if problems else None,

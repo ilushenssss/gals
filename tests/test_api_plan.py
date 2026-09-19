@@ -5,6 +5,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from shapely.geometry import Polygon, shape
 
 from uav_planner.api.app import app
 from uav_planner.api import fleet_service, plan_service, service as environment_service, task_service
@@ -130,6 +131,27 @@ def test_get_plan_returns_sorties_with_route_geometry(client):
         assert sortie["end_utc"] > sortie["start_utc"]
 
 
+def test_sortie_phases_cover_the_whole_flight_with_no_gaps(client):
+    env_id = _upload_environment(client)
+    _upload_fleet(client, n=1)
+    task_id = _create_task(client, env_id)
+    plan_id = client.post("/api/plans", data={"task_id": task_id}).json()["id"]
+    detail = client.get(f"/api/plans/{plan_id}").json()
+
+    for sortie in detail["sorties"]:
+        phases = sortie["phases"]
+        assert phases  # взлет+перелет и хотя бы один галс есть всегда
+        assert phases[0]["start_utc"] == sortie["start_utc"]
+        assert phases[-1]["end_utc"] == sortie["end_utc"]
+        assert "Взлет" in phases[0]["label"]
+        assert any("Возврат" in p["label"] for p in phases) or phases[-1]["kind"] == "survey"
+        # Этапы идут стык в стык, без разрывов и наложений.
+        for prev, nxt in zip(phases, phases[1:]):
+            assert prev["end_utc"] == nxt["start_utc"]
+        total_phase_distance = sum(p["distance_m"] for p in phases)
+        assert total_phase_distance == pytest.approx(sortie["distance_m"], rel=1e-6)
+
+
 def test_second_calculation_creates_new_version(client):
     env_id = _upload_environment(client)
     _upload_fleet(client)
@@ -187,6 +209,203 @@ def test_create_plan_for_unknown_task_returns_404(client):
 def test_get_unknown_plan_returns_404(client):
     resp = client.get("/api/plans/does-not-exist")
     assert resp.status_code == 404
+
+
+def test_transit_route_avoids_no_fly_zone_via_astar(client):
+    # БПЗ стоит прямо на прямой линии между ВПП и областью облета —
+    # маршрут перехода должен обойти ее (uav_planner.visibility.find_path),
+    # а не пересечь по прямой.
+    no_fly_zone = Polygon(square_coords(37.570, 55.7045, 0.003, 0.002)[0])
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"layer": "airspace", "h_min": 0, "h_max": 300},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.55, 55.70, 0.10, 0.01)},
+        },
+        {
+            "type": "Feature",
+            "properties": {"layer": "launch_site", "name": "ВПП-1"},
+            "geometry": {"type": "Point", "coordinates": [37.56, 55.705]},
+        },
+        {
+            "type": "Feature",
+            "properties": {"layer": "no_fly", "safety_buffer_m": 0},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.570, 55.7045, 0.003, 0.002)},
+        },
+    ]
+    scene = {"type": "FeatureCollection", "features": features}
+    resp = client.post(
+        "/api/environments",
+        data={"name": "Обстановка с БПЗ на пути"},
+        files={"file": ("scene.geojson", io.BytesIO(json.dumps(scene).encode("utf-8")), "application/json")},
+    )
+    env_id = resp.json()["id"]
+    _upload_fleet(client, n=1)
+    task_id = _create_task(client, env_id)
+
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 200, resp.text
+    plan_id = resp.json()["id"]
+    detail = client.get(f"/api/plans/{plan_id}").json()
+
+    assert detail["warnings"] == []  # обход найден, откат на прямую линию не потребовался
+    for sortie in detail["sorties"]:
+        route = shape(sortie["track_geojson"])
+        assert not route.intersects(no_fly_zone) or route.touches(no_fly_zone)
+        # Маршрут действительно длиннее, чем если бы шел напрямую через зону.
+        assert route.length > 0
+
+
+def test_smaller_but_faster_model_group_wins_by_criterion(client):
+    # Один быстрый и выносливый геоскан-201 против трех медленных gemini:
+    # раньше побеждала группа с наибольшим числом экземпляров (gemini, 3>1);
+    # теперь побеждает та, что реально минимизирует критерий задачи (J1 при
+    # "Время") — а один быстрый самолет отработает задачу заметно быстрее.
+    env_id = _upload_environment(client)
+    records = [{"inventory_number": "201-1", "model": "geoscan-201", "status": "Готов"}] + [
+        {"inventory_number": f"GEM-{i}", "model": "geoscan-gemini", "status": "Готов"} for i in range(3)
+    ]
+    resp = client.post(
+        "/api/fleet",
+        files={"file": ("fleet.json", io.BytesIO(json.dumps(records).encode("utf-8")), "application/json")},
+    )
+    assert resp.status_code == 200
+    task_id = _create_task(client, env_id, criterion_mode="Время")
+
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["uav_model"] == "Геоскан 201"
+
+
+def test_launch_site_chosen_by_nearest_not_first(client):
+    # Дальняя ВПП стоит первой в файле обстановки — если бы площадка
+    # выбиралась "первой попавшейся", вылет стартовал бы с нее; на деле
+    # должна победить ближняя к области облета, вне зависимости от порядка.
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"layer": "airspace", "h_min": 0, "h_max": 300},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.40, 55.60, 0.30, 0.20)},
+        },
+        {
+            "type": "Feature",
+            "properties": {"layer": "launch_site", "name": "ВПП Дальняя"},
+            "geometry": {"type": "Point", "coordinates": [37.60, 55.75]},
+        },
+        {
+            "type": "Feature",
+            "properties": {"layer": "launch_site", "name": "ВПП Ближняя"},
+            "geometry": {"type": "Point", "coordinates": [37.579, 55.703]},
+        },
+    ]
+    scene = {"type": "FeatureCollection", "features": features}
+    resp = client.post(
+        "/api/environments",
+        data={"name": "Две ВПП"},
+        files={"file": ("scene.geojson", io.BytesIO(json.dumps(scene).encode("utf-8")), "application/json")},
+    )
+    env_id = resp.json()["id"]
+    _upload_fleet(client, n=1)
+    task_id = _create_task(client, env_id)
+
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 200, resp.text
+    detail = client.get(f"/api/plans/{resp.json()['id']}").json()
+    assert detail["sorties"][0]["takeoff_site"] == "ВПП Ближняя"
+
+
+def test_instance_own_location_overrides_nearest_site(client):
+    # У экземпляра указана собственная локация (совпадающая с дальней ВПП) -
+    # она и должна использоваться, даже если геометрически есть ВПП ближе.
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"layer": "airspace", "h_min": 0, "h_max": 300},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.40, 55.60, 0.30, 0.20)},
+        },
+        {
+            "type": "Feature",
+            "properties": {"layer": "launch_site", "name": "ВПП Ближняя"},
+            "geometry": {"type": "Point", "coordinates": [37.579, 55.703]},
+        },
+    ]
+    scene = {"type": "FeatureCollection", "features": features}
+    resp = client.post(
+        "/api/environments",
+        data={"name": "Своя локация"},
+        files={"file": ("scene.geojson", io.BytesIO(json.dumps(scene).encode("utf-8")), "application/json")},
+    )
+    env_id = resp.json()["id"]
+    records = [{
+        "inventory_number": "GEM-1", "model": "geoscan-gemini", "status": "Готов",
+        "base_launch_site": "Своя площадка", "location_lat": 55.75, "location_lon": 37.60,
+    }]
+    resp = client.post(
+        "/api/fleet",
+        files={"file": ("fleet.json", io.BytesIO(json.dumps(records).encode("utf-8")), "application/json")},
+    )
+    assert resp.status_code == 200
+    task_id = _create_task(client, env_id)
+
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 200, resp.text
+    detail = client.get(f"/api/plans/{resp.json()['id']}").json()
+    assert detail["sorties"][0]["takeoff_site"] == "Своя площадка"
+
+
+def test_work_splits_across_two_vehicles_at_opposite_ends_of_the_area(client):
+    # Два БВС у противоположных концов вытянутой области облета: жадный
+    # маршрутизатор (routing.cluster_assign_and_route, Шаги 2-4) должен
+    # закрепить каждому его половину, а не отдать всё одному.
+    features = [{
+        "type": "Feature",
+        "properties": {"layer": "airspace", "h_min": 0, "h_max": 300},
+        "geometry": {"type": "Polygon", "coordinates": square_coords(37.55, 55.70, 0.03, 0.01)},
+    }]
+    scene = {"type": "FeatureCollection", "features": features}
+    resp = client.post(
+        "/api/environments",
+        data={"name": "Вытянутая область"},
+        files={"file": ("scene.geojson", io.BytesIO(json.dumps(scene).encode("utf-8")), "application/json")},
+    )
+    env_id = resp.json()["id"]
+    records = [
+        {"inventory_number": "GEM-W", "model": "geoscan-gemini", "status": "Готов",
+         "location_lat": 55.705, "location_lon": 37.552},
+        {"inventory_number": "GEM-E", "model": "geoscan-gemini", "status": "Готов",
+         "location_lat": 55.705, "location_lon": 37.578},
+    ]
+    resp = client.post(
+        "/api/fleet",
+        files={"file": ("fleet.json", io.BytesIO(json.dumps(records).encode("utf-8")), "application/json")},
+    )
+    assert resp.status_code == 200
+
+    area = {"type": "Polygon", "coordinates": square_coords(37.552, 55.702, 0.026, 0.004)}
+    form = {
+        "name": "Задача с двумя площадками", "environment_id": env_id, "survey_type": "RGB",
+        "gsd_cm": "3.0", "work_date": "2026-06-15", "criterion_mode": "Время",
+    }
+    resp = client.post(
+        "/api/tasks", data=form,
+        files={"area_file": ("area.geojson", io.BytesIO(json.dumps(area).encode("utf-8")), "application/json")},
+    )
+    assert resp.status_code == 200, resp.text
+    task_id = resp.json()["id"]
+
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 200, resp.text
+    detail = client.get(f"/api/plans/{resp.json()['id']}").json()
+
+    by_vehicle: dict[str, list] = {}
+    for sortie in detail["sorties"]:
+        by_vehicle.setdefault(sortie["uav_id"], []).append(sortie)
+
+    assert set(by_vehicle) == {"GEM-W", "GEM-E"}  # оба реально участвуют, не только один
+    totals = {vid: sum(s["flight_time_s"] for s in sorties) for vid, sorties in by_vehicle.items()}
+    # Балансировка узкого места не гарантирует идеальное равенство, но не
+    # должна оставлять один БВС почти без работы на фоне другого.
+    assert min(totals.values()) > 0.3 * max(totals.values())
 
 
 def test_higher_wind_speed_increases_total_flight_time(client):

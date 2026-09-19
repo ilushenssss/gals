@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from shapely.geometry import shape
+from shapely.geometry import Point, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
@@ -30,6 +30,7 @@ from uav_planner.geometry import (
 from uav_planner.safety import (
     CheckResult,
     SortieTrack,
+    Violation,
     check_allowed_space,
     check_coverage,
     check_daylight,
@@ -43,7 +44,7 @@ from . import plan_service
 from . import service as environment_service
 from . import task_service
 from .plan_models import PlanDetail
-from .safety_models import SafetyCheckOut, SafetyReport
+from .safety_models import SafetyCheckOut, SafetyReport, ViolationOut
 
 MAX_AUTO_RECALC = 3
 
@@ -73,16 +74,28 @@ def _time_to_hours(t) -> float | None:
     return None if t is None else t.hour + t.minute / 60.0 + t.second / 3600.0
 
 
-def _combine(name: str, results: list[CheckResult]) -> SafetyCheckOut:
-    violations: list[str] = []
+def _violation_out(v: Violation, projector: Projector) -> ViolationOut:
+    if v.point is None:
+        return ViolationOut(message=v.message)
+    wgs = projector.to_wgs84(v.point)
+    return ViolationOut(message=v.message, lat=wgs.y, lon=wgs.x)
+
+
+def _combine(name: str, results: list[CheckResult], projector: Projector) -> SafetyCheckOut:
+    violations: list[Violation] = []
     for r in results:
         violations.extend(r.violations)
-    unique = list(dict.fromkeys(violations))
-    shown = unique[:5]
+    unique: dict[str, Violation] = {}
+    for v in violations:
+        unique.setdefault(v.message, v)
+    shown = list(unique.values())[:5]
     if len(unique) > 5:
-        shown.append(f"...и еще {len(unique) - 5} нарушени(й)")
+        shown.append(Violation(f"...и еще {len(unique) - 5} нарушени(й)"))
     passed = all(r.passed for r in results) if results else True
-    return SafetyCheckOut(name=name, label=_LABELS[name], passed=passed, violations=shown)
+    return SafetyCheckOut(
+        name=name, label=_LABELS[name], passed=passed,
+        violations=[_violation_out(v, projector) for v in shown],
+    )
 
 
 def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
@@ -150,17 +163,22 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
 
         if allowed_union is None:
             airspace_results.append(CheckResult("airspace", False, (
-                "в обстановке нет ни одной зоны разрешенного воздушного пространства",
+                Violation("в обстановке нет ни одной зоны разрешенного воздушного пространства", Point(route_utm.coords[0])),
             )))
         else:
             airspace_results.append(check_allowed_space(route_utm, allowed_union))
 
-        energy_results.append(check_energy(route_utm.length, plan.cruise_speed_mps, plan.budget_s))
+        energy_results.append(
+            check_energy(route_utm.length, plan.cruise_speed_mps, plan.budget_s, route=route_utm)
+        )
         reachability_results.append(
             check_reachability(route_utm, landing_points, plan.cruise_speed_mps, plan.budget_s)
         )
         daylight_results.append(
-            check_daylight(sortie.start_utc, sortie.end_utc, lat, lon, window_start_hour, window_end_hour)
+            check_daylight(
+                sortie.start_utc, sortie.end_utc, lat, lon, window_start_hour, window_end_hour,
+                location=Point(route_utm.coords[0]),
+            )
         )
         sortie_tracks.append(SortieTrack(
             uav_id=sortie.uav_id, route=route_utm,
@@ -174,18 +192,24 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         )
         coverage_result = check_coverage(all_survey_tracks_utm, working_area, plan.swath_m)
     except GeometryError as exc:
-        coverage_result = CheckResult("coverage", False, (f"не удалось пересчитать рабочую область: {exc}",))
+        coverage_result = CheckResult("coverage", False, (Violation(f"не удалось пересчитать рабочую область: {exc}"),))
 
     separation_result = check_separation(sortie_tracks)
 
     return [
-        _combine("geozones", geozone_results),
-        _combine("airspace", airspace_results),
-        _combine("energy", energy_results),
-        _combine("reachability", reachability_results),
-        SafetyCheckOut(name="coverage", label=_LABELS["coverage"], passed=coverage_result.passed, violations=list(coverage_result.violations)),
-        _combine("daylight", daylight_results),
-        SafetyCheckOut(name="separation", label=_LABELS["separation"], passed=separation_result.passed, violations=list(separation_result.violations)),
+        _combine("geozones", geozone_results, projector),
+        _combine("airspace", airspace_results, projector),
+        _combine("energy", energy_results, projector),
+        _combine("reachability", reachability_results, projector),
+        SafetyCheckOut(
+            name="coverage", label=_LABELS["coverage"], passed=coverage_result.passed,
+            violations=[_violation_out(v, projector) for v in coverage_result.violations],
+        ),
+        _combine("daylight", daylight_results, projector),
+        SafetyCheckOut(
+            name="separation", label=_LABELS["separation"], passed=separation_result.passed,
+            violations=[_violation_out(v, projector) for v in separation_result.violations],
+        ),
     ]
 
 

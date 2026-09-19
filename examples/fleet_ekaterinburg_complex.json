@@ -1,0 +1,17 @@
+[
+  { "inventory_number": "UKT-201-01", "model": "geoscan-201", "status": "Готов", "base_launch_site": "Аэродром Уктус", "location_lat": 56.7625, "location_lon": 60.5992 },
+  { "inventory_number": "UKT-201-02", "model": "geoscan-201", "status": "На обслуживании", "base_launch_site": "Аэродром Уктус", "location_lat": 56.7625, "location_lon": 60.5992 },
+  { "inventory_number": "UKT-GEM-01", "model": "geoscan-gemini", "status": "Готов", "base_launch_site": "Аэродром Уктус", "location_lat": 56.7625, "location_lon": 60.5992 },
+  { "inventory_number": "UKT-GEM-02", "model": "geoscan-gemini", "status": "Готов", "base_launch_site": "Аэродром Уктус", "location_lat": 56.7625, "location_lon": 60.5992 },
+  { "inventory_number": "UKT-801-01", "model": "geoscan-801", "status": "Готов", "base_launch_site": "Аэродром Уктус", "location_lat": 56.7625, "location_lon": 60.5992 },
+
+  { "inventory_number": "VPY-201-01", "model": "geoscan-201", "status": "Готов", "base_launch_site": "Площадка Верхняя Пышма", "location_lat": 56.9750, "location_lon": 60.5636 },
+  { "inventory_number": "VPY-GEM-01", "model": "geoscan-gemini", "status": "Готов", "base_launch_site": "Площадка Верхняя Пышма", "location_lat": 56.9750, "location_lon": 60.5636 },
+  { "inventory_number": "VPY-GEM-02", "model": "geoscan-gemini", "status": "Недоступен", "base_launch_site": "Площадка Верхняя Пышма", "location_lat": 56.9750, "location_lon": 60.5636 },
+  { "inventory_number": "VPY-801-01", "model": "geoscan-801", "status": "Готов", "base_launch_site": "Площадка Верхняя Пышма", "location_lat": 56.9750, "location_lon": 60.5636 },
+
+  { "inventory_number": "BER-201-01", "model": "geoscan-201", "status": "Готов", "base_launch_site": "Площадка Березовский", "location_lat": 56.9080, "location_lon": 60.8100 },
+  { "inventory_number": "BER-GEM-01", "model": "geoscan-gemini", "status": "Готов", "base_launch_site": "Площадка Березовский", "location_lat": 56.9080, "location_lon": 60.8100 },
+  { "inventory_number": "BER-801-01", "model": "geoscan-801", "status": "Готов", "base_launch_site": "Площадка Березовский", "location_lat": 56.9080, "location_lon": 60.8100 },
+  { "inventory_number": "BER-801-02", "model": "geoscan-801", "status": "На обслуживании", "base_launch_site": "Площадка Березовский", "location_lat": 56.9080, "location_lon": 60.8100 }
+]

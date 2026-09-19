@@ -59,11 +59,14 @@ def _upload_environment(client, with_launch_site=True, no_fly=False):
             "geometry": {"type": "Point", "coordinates": [37.56, 55.705]},
         })
     if no_fly:
-        # Небольшая БПЗ прямо посередине области облета, задаваемой в _create_task ниже.
+        # "Стена" БПЗ поперек всего пути от ВПП-1 (37.56, 55.705) до области
+        # облета (_create_task ниже) — растянута по широте намного дальше,
+        # чем может искать A* (visibility.find_path), поэтому обхода
+        # заведомо не существует и нарушение остается неустранимым.
         features.append({
             "type": "Feature",
             "properties": {"layer": "no_fly", "safety_buffer_m": 0},
-            "geometry": {"type": "Polygon", "coordinates": square_coords(37.581, 55.7025, 0.003, 0.002)},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.565, 55.0, 0.01, 1.4)},
         })
     scene = {"type": "FeatureCollection", "features": features}
     data = json.dumps(scene).encode("utf-8")
@@ -130,7 +133,7 @@ def test_safety_check_happy_path_passes(client):
     assert body["auto_recalc_count"] == 0
 
 
-def test_safety_check_detects_no_fly_zone_violation(client):
+def test_safety_check_detects_unavoidable_no_fly_zone_violation(client):
     plan_id = _make_plan(client, no_fly=True)
     resp = client.post("/api/safety-checks", data={"plan_id": plan_id})
     assert resp.status_code == 200, resp.text
@@ -139,6 +142,64 @@ def test_safety_check_detects_no_fly_zone_violation(client):
     assert geozones["passed"] is False
     assert geozones["violations"]
     assert body["status"] == "Есть нарушения"
+
+
+def test_violations_carry_wgs84_coordinates_for_map_markers(client):
+    # Каждое нарушение "геозон" — точка на реальном маршруте, поэтому у нее
+    # должны быть координаты (для отметки на карте и подсветки, ИНТ.ФТ.14-15).
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    geozones = next(c for c in report["checks"] if c["name"] == "geozones")
+    assert geozones["violations"]
+    for v in geozones["violations"]:
+        if v["message"].startswith("..."):
+            continue  # сводная строка "...и еще N нарушений" — без точки
+        assert v["lat"] is not None and v["lon"] is not None
+        assert 54.0 < v["lat"] < 57.0  # в разумных пределах сцены (широта)
+        assert 37.0 < v["lon"] < 38.0  # долгота
+
+
+def test_astar_avoids_small_no_fly_zone_so_safety_check_passes(client):
+    # Небольшая БПЗ прямо на пути от ВПП к области облета — в отличие от
+    # непроходимой "стены" выше, ее можно обойти локальным A*
+    # (uav_planner.visibility.find_path), и независимая проверка не должна
+    # находить нарушения геозон.
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"layer": "airspace", "h_min": 0, "h_max": 300},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.55, 55.70, 0.10, 0.01)},
+        },
+        {
+            "type": "Feature",
+            "properties": {"layer": "launch_site", "name": "ВПП-1"},
+            "geometry": {"type": "Point", "coordinates": [37.56, 55.705]},
+        },
+        {
+            "type": "Feature",
+            "properties": {"layer": "no_fly", "safety_buffer_m": 0},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.570, 55.7045, 0.003, 0.002)},
+        },
+    ]
+    scene = {"type": "FeatureCollection", "features": features}
+    resp = client.post(
+        "/api/environments",
+        data={"name": "Обстановка с малой БПЗ"},
+        files={"file": ("scene.geojson", io.BytesIO(json.dumps(scene).encode("utf-8")), "application/json")},
+    )
+    assert resp.status_code == 200, resp.text
+    env_id = resp.json()["id"]
+
+    _upload_fleet(client, n=1)
+    task_id = _create_task(client, env_id)
+    plan = client.post("/api/plans", data={"task_id": task_id}).json()
+    detail = client.get(f"/api/plans/{plan['id']}").json()
+    assert detail["warnings"] == []
+
+    report = client.post("/api/safety-checks", data={"plan_id": plan["id"]}).json()
+    geozones = next(c for c in report["checks"] if c["name"] == "geozones")
+    assert geozones["passed"] is True
+    assert report["status"] == "Пройдена"
 
 
 def test_safety_check_exhausts_auto_recalc_limit_on_persistent_violation(client):
