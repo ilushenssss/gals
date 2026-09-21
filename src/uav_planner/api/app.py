@@ -1,20 +1,19 @@
-"""Точка входа веб-сервиса: API и (пока) статический фронтенд первой версии.
+"""Точка входа веб-сервиса: только API.
 
 Приложение собирается фабрикой ``create_app(settings)`` — так тесты могут
 поднять его с другими настройками, а модульный ``app`` сохранен для
 ``uvicorn uav_planner.api.app:app`` и существующих тестов на ``TestClient``.
 
-Статика отдается этим же процессом, только пока ``GALS_SERVE_STATIC=true``. В
-целевой схеме SPA отдает контейнер ``web`` (nginx), и флаг выключается.
+Фронтенд этот процесс не отдает: SPA собирается в ``web/`` и раздается nginx
+в контейнере ``web``, который же проксирует ``/api`` сюда. Поэтому оба живут
+на одном origin, и CORS не нужен (список ``cors_origins`` по умолчанию пуст и
+остается на случай, когда фронтенд поднимают отдельно).
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from uav_planner.config import Settings, get_settings
 
@@ -27,9 +26,6 @@ from .routers.plan_jobs import router as plan_jobs_router
 from .routers.plans import router as plans_router
 from .routers.safety import router as safety_router
 from .routers.tasks import router as tasks_router
-
-STATIC_DIR = Path(__file__).parent / "static"
-
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
@@ -59,11 +55,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(plans_router)
     app.include_router(plan_jobs_router)
     app.include_router(safety_router)
-
-    # Монтируется последним: StaticFiles на "/" перехватывает все, что не
-    # разобрали роутеры выше.
-    if settings.serve_static and STATIC_DIR.is_dir():
-        app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")
 
     return app
 

@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 from datetime import date, time
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from typing import Annotated
 
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+
+from uav_planner.api.deps import DEFAULT_USER, current_user
 from uav_planner.services import task_service
 from uav_planner.api.schemas.task import TaskDetail, TaskSummary
 from uav_planner.services.task_service import TaskConflictError, TaskNotEditableError, TaskValidationError
@@ -42,6 +45,7 @@ async def create_task(
     criterion_mode: str = Form(...),
     criterion_alpha: float | None = Form(None),
     area_file: UploadFile = File(...),
+    user: Annotated[str, Depends(current_user)] = DEFAULT_USER,
 ) -> TaskSummary:
     area_geojson = await _read_area_geojson(area_file)
     try:
@@ -49,7 +53,7 @@ async def create_task(
             name=name, environment_id=environment_id, survey_type=survey_type, gsd_cm=gsd_cm,
             work_date=work_date, window_start=_parse_time(window_start), window_end=_parse_time(window_end),
             wind_speed_ms=wind_speed_ms, cloud_cover_pct=cloud_cover_pct, criterion_mode=criterion_mode,
-            criterion_alpha=criterion_alpha, area_geojson=area_geojson,
+            criterion_alpha=criterion_alpha, area_geojson=area_geojson, user=user,
         )
     except TaskValidationError as exc:
         raise HTTPException(status_code=400, detail=[i.model_dump() for i in exc.issues]) from exc
@@ -70,6 +74,7 @@ async def update_task(
     criterion_mode: str = Form(...),
     criterion_alpha: float | None = Form(None),
     area_file: UploadFile = File(...),
+    user: Annotated[str, Depends(current_user)] = DEFAULT_USER,
 ) -> TaskSummary:
     area_geojson = await _read_area_geojson(area_file)
     try:
@@ -77,7 +82,7 @@ async def update_task(
             task_id, expected_version, name=name, survey_type=survey_type, gsd_cm=gsd_cm,
             work_date=work_date, window_start=_parse_time(window_start), window_end=_parse_time(window_end),
             wind_speed_ms=wind_speed_ms, cloud_cover_pct=cloud_cover_pct, criterion_mode=criterion_mode,
-            criterion_alpha=criterion_alpha, area_geojson=area_geojson,
+            criterion_alpha=criterion_alpha, area_geojson=area_geojson, user=user,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="задача не найдена")

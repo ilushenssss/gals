@@ -1363,6 +1363,17 @@
             "title": "Updated At",
             "type": "string"
           },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
+          },
           "version": {
             "title": "Version",
             "type": "integer"
@@ -1489,6 +1500,17 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
           },
           "version": {
             "title": "Version",
@@ -2514,6 +2536,24 @@
       },
       "post": {
         "operationId": "create_task_api_tasks_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-user-name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Name"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "multipart/form-data": {
@@ -2603,6 +2643,22 @@
             "schema": {
               "title": "Task Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Name"
             }
           }
         ],

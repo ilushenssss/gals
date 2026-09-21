@@ -13,6 +13,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from uav_planner import repositories
+from uav_planner.api.deps import DEFAULT_USER
 from uav_planner.domain.errors import ConflictError, ValidationError
 from uav_planner.geometry import GeometryError, Projector, validate_polygon
 from uav_planner.schedule import daylight_window_utc_hours
@@ -157,6 +158,7 @@ def create_task(
     criterion_mode: str,
     criterion_alpha: float | None,
     area_geojson: dict[str, Any],
+    user: str = DEFAULT_USER,
 ) -> TaskSummary:
     env, alpha, area_geom = _validate(
         environment_id=environment_id, survey_type=survey_type, gsd_cm=gsd_cm, work_date=work_date,
@@ -173,7 +175,7 @@ def create_task(
         daylight_warning=warning, created_at=now, updated_at=now, gsd_cm=gsd_cm,
         window_start=window_start, window_end=window_end, wind_speed_ms=wind_speed_ms,
         cloud_cover_pct=cloud_cover_pct, criterion_mode=criterion_mode, criterion_alpha=alpha,
-        area=area_geojson,
+        area=area_geojson, updated_by=user,
     )
     repositories.tasks.put(task_id, detail)
     return _to_summary(detail)
@@ -194,6 +196,7 @@ def update_task(
     criterion_mode: str,
     criterion_alpha: float | None,
     area_geojson: dict[str, Any],
+    user: str = DEFAULT_USER,
 ) -> TaskSummary:
     """ЗАД.ФТ.9-10 (редактирование) + ЗАД.ФТ.12 (оптимистичная блокировка версии)."""
     existing = repositories.tasks.get(task_id)  # KeyError -> 404 в routes
@@ -201,7 +204,14 @@ def update_task(
     if existing.status == "Подтверждена":
         raise TaskNotEditableError("план по этой задаче подтвержден — редактирование недоступно")
     if existing.version != expected_version:
-        raise TaskConflictError(f"задача изменена другим пользователем (текущая версия {existing.version})")
+        # ЗАД.ФТ.12 требует показать, кто именно изменил задачу. Имени может и
+        # не быть (задачу создали до появления заголовка) — тогда безличная
+        # формулировка, но версия называется всегда.
+        who = f" ({existing.updated_by})" if existing.updated_by else ""
+        raise TaskConflictError(
+            f"задача изменена другим пользователем{who} "
+            f"— текущая версия {existing.version}"
+        )
 
     env, alpha, area_geom = _validate(
         environment_id=existing.environment_id, survey_type=survey_type, gsd_cm=gsd_cm, work_date=work_date,
@@ -219,7 +229,7 @@ def update_task(
         "updated_at": datetime.now(timezone.utc), "gsd_cm": gsd_cm,
         "window_start": window_start, "window_end": window_end, "wind_speed_ms": wind_speed_ms,
         "cloud_cover_pct": cloud_cover_pct, "criterion_mode": criterion_mode,
-        "criterion_alpha": alpha, "area": area_geojson,
+        "criterion_alpha": alpha, "area": area_geojson, "updated_by": user,
     })
     repositories.tasks.put(task_id, updated)
     return _to_summary(updated)

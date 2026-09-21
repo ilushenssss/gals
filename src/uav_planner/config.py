@@ -52,10 +52,9 @@ class Settings(BaseSettings):
     celery_task_always_eager: bool = False
 
     # --- HTTP --------------------------------------------------------------
-    # Фронтенд и API ходят через один origin (nginx / Vite dev-proxy), поэтому
-    # по умолчанию CORS не нужен и список пуст.
+    # Фронтенд и API ходят через один origin (nginx в контейнере web либо
+    # dev-proxy Vite), поэтому по умолчанию CORS не нужен и список пуст.
     cors_origins: list[str] = []
-    serve_static: bool = True  # False, когда статику отдает контейнер web
     max_upload_bytes: int = 50 * 1024 * 1024
 
     # --- расчет ------------------------------------------------------------

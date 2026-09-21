@@ -895,6 +895,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Updated By */
+            updated_by?: string | null;
             /** Version */
             version: number;
             /** Wind Speed Ms */
@@ -941,6 +943,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Updated By */
+            updated_by?: string | null;
             /** Version */
             version: number;
             /**
@@ -1611,7 +1615,9 @@ export interface operations {
     create_task_api_tasks_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-user-name"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1675,7 +1681,9 @@ export interface operations {
     update_task_api_tasks__task_id__put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-user-name"?: string | null;
+            };
             path: {
                 task_id: string;
             };

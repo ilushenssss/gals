@@ -193,7 +193,11 @@ def test_get_unknown_environment_returns_404(client):
     assert resp.status_code == 404
 
 
-def test_frontend_index_is_served(client):
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert "Галс" in resp.text
+def test_api_process_does_not_serve_the_frontend(client):
+    """Фронтенд раздает nginx в контейнере `web`, а не этот процесс.
+
+    Проверка осталась от первой версии интерфейса, которая жила внутри
+    пакета. Теперь корень отдает 404 — и это правильный ответ: если он вдруг
+    снова начнет отдавать HTML, значит в образ API опять попала статика.
+    """
+    assert client.get("/").status_code == 404

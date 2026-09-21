@@ -36,6 +36,9 @@ class TaskSummary(BaseModel):
     daylight_warning: str | None = None
     created_at: datetime
     updated_at: datetime
+    # ЗАД.ФТ.12: сообщение о конфликте обязано назвать того, кто изменил
+    # задачу первым. Аутентификации нет — это имя из заголовка X-User-Name.
+    updated_by: str | None = None
 
 
 class TaskDetail(TaskSummary):

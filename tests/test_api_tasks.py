@@ -233,3 +233,44 @@ def test_create_task_with_unknown_environment_returns_400(client):
         files=_area_file(square_coords(37.2, 55.2, 0.2)),
     )
     assert resp.status_code == 400
+
+
+def test_conflict_message_names_the_user_who_edited_first(client):
+    """ЗАД.ФТ.12: второй редактор видит, кто изменил задачу, и текущую версию.
+
+    Имя приходит заголовком `X-User-Name` и кодируется процентами: ФИО
+    кириллические, а значение HTTP-заголовка обязано быть ASCII (см.
+    api/deps.py).
+    """
+    from urllib.parse import quote
+
+    env_id = _upload_environment(client)
+    created = client.post(
+        "/api/tasks", data=_base_form(env_id), files=_area_file(square_coords(37.2, 55.2, 0.2))
+    ).json()
+
+    form = _base_form(env_id, name="Правка Иванова")
+    form["expected_version"] = "1"
+    first = client.put(
+        f"/api/tasks/{created['id']}", data=form,
+        files=_area_file(square_coords(37.2, 55.2, 0.2)),
+        headers={"X-User-Name": quote("Иванов И. И.")},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["version"] == 2
+
+    # Второй редактор всё ещё держит в форме версию 1.
+    stale = _base_form(env_id, name="Правка Сидорова")
+    stale["expected_version"] = "1"
+    second = client.put(
+        f"/api/tasks/{created['id']}", data=stale,
+        files=_area_file(square_coords(37.2, 55.2, 0.2)),
+        headers={"X-User-Name": quote("Сидоров С. С.")},
+    )
+    assert second.status_code == 409
+    detail = second.json()["detail"]
+    assert "Иванов И. И." in detail
+    assert "версия 2" in detail
+
+    # Правка второго не применилась.
+    assert client.get(f"/api/tasks/{created['id']}").json()["name"] == "Правка Иванова"

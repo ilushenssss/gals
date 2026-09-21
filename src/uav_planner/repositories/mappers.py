@@ -216,6 +216,7 @@ def apply_task(row: Task, detail: TaskDetail) -> Task:
         setattr(row, column, getattr(detail, column))
     row.area = detail.area
     row.area_geom = _geom_or_none(detail.area)
+    row.updated_by = detail.updated_by
     return row
 
 
@@ -232,6 +233,7 @@ def task_from_row(row: Task) -> TaskDetail:
         daylight_warning=row.daylight_warning,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        updated_by=row.updated_by,
         gsd_cm=row.gsd_cm,
         window_start=row.window_start,
         window_end=row.window_end,

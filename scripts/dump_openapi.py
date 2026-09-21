@@ -14,11 +14,11 @@ from pathlib import Path
 
 def main() -> int:
     target = Path(sys.argv[1] if len(sys.argv) > 1 else "web/openapi.json")
-    # Статика и БД для снятия схемы не нужны и только мешают в CI.
+    # Подключение к БД для снятия схемы не нужно и только мешает в CI.
     from uav_planner.config import Settings
     from uav_planner.api.app import create_app
 
-    app = create_app(Settings(serve_static=False, database_url=""))
+    app = create_app(Settings(database_url=""))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(app.openapi(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",

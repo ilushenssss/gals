@@ -1,9 +1,8 @@
 # Полный запуск сервиса «Галс»: docker compose up --build
 #
 # Состав: db (PostGIS), redis, одноразовый накат миграций, api, worker
-# (фоновый расчет) и web (SPA за nginx). SPA открывается на WEB_PORT (8080),
-# legacy-интерфейс пока остается на API_PORT — разные порты, чтобы cutover
-# был правкой compose, а не перенастройкой роутинга.
+# (фоновый расчет) и web (SPA за nginx). Интерфейс открывается на WEB_PORT
+# (8080); api наружу публикуется только в dev-надстройке, для /docs и curl.
 
 services:
   db:
@@ -53,7 +52,6 @@ services:
       GALS_LOG_LEVEL: ${GALS_LOG_LEVEL:-INFO}
       GALS_DATABASE_URL: ${GALS_DATABASE_URL:-postgresql+psycopg://gals:gals@db:5432/gals}
       GALS_REDIS_URL: ${GALS_REDIS_URL:-redis://redis:6379/0}
-      GALS_SERVE_STATIC: ${GALS_SERVE_STATIC:-true}
       GALS_PLAN_SYNC_WAIT_SECONDS: ${GALS_PLAN_SYNC_WAIT_SECONDS:-30}
       GALS_PLAN_TIME_LIMIT_S: ${GALS_PLAN_TIME_LIMIT_S:-1800}
       GALS_EXPORT_DIR: /data/exports
@@ -72,7 +70,6 @@ services:
       GALS_LOG_LEVEL: ${GALS_LOG_LEVEL:-INFO}
       GALS_DATABASE_URL: ${GALS_DATABASE_URL:-postgresql+psycopg://gals:gals@db:5432/gals}
       GALS_REDIS_URL: ${GALS_REDIS_URL:-redis://redis:6379/0}
-      GALS_SERVE_STATIC: ${GALS_SERVE_STATIC:-true}
       GALS_PLAN_SYNC_WAIT_SECONDS: ${GALS_PLAN_SYNC_WAIT_SECONDS:-30}
       GALS_PLAN_TIME_LIMIT_S: ${GALS_PLAN_TIME_LIMIT_S:-1800}
       GALS_EXPORT_DIR: /data/exports
@@ -109,7 +106,6 @@ services:
       GALS_LOG_LEVEL: ${GALS_LOG_LEVEL:-INFO}
       GALS_DATABASE_URL: ${GALS_DATABASE_URL:-postgresql+psycopg://gals:gals@db:5432/gals}
       GALS_REDIS_URL: ${GALS_REDIS_URL:-redis://redis:6379/0}
-      GALS_SERVE_STATIC: ${GALS_SERVE_STATIC:-true}
       GALS_PLAN_SYNC_WAIT_SECONDS: ${GALS_PLAN_SYNC_WAIT_SECONDS:-30}
       GALS_PLAN_HARD_TIME_LIMIT_S: ${GALS_PLAN_HARD_TIME_LIMIT_S:-1980}
       GALS_PLAN_TIME_LIMIT_S: ${GALS_PLAN_TIME_LIMIT_S:-1800}
