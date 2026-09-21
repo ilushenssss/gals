@@ -1,0 +1,2648 @@
+{
+  "components": {
+    "schemas": {
+      "Body_create_plan_api_plans_post": {
+        "properties": {
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "wait_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait S"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "Body_create_plan_api_plans_post",
+        "type": "object"
+      },
+      "Body_create_task_api_tasks_post": {
+        "properties": {
+          "area_file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "Area File",
+            "type": "string"
+          },
+          "cloud_cover_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cloud Cover Pct"
+          },
+          "criterion_alpha": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Criterion Alpha"
+          },
+          "criterion_mode": {
+            "title": "Criterion Mode",
+            "type": "string"
+          },
+          "environment_id": {
+            "title": "Environment Id",
+            "type": "string"
+          },
+          "gsd_cm": {
+            "title": "Gsd Cm",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "survey_type": {
+            "title": "Survey Type",
+            "type": "string"
+          },
+          "wind_speed_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wind Speed Ms"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
+          },
+          "work_date": {
+            "format": "date",
+            "title": "Work Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "environment_id",
+          "survey_type",
+          "gsd_cm",
+          "work_date",
+          "criterion_mode",
+          "area_file"
+        ],
+        "title": "Body_create_task_api_tasks_post",
+        "type": "object"
+      },
+      "Body_recheck_safety_check_api_safety_checks_recheck_post": {
+        "properties": {
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "title": "Body_recheck_safety_check_api_safety_checks_recheck_post",
+        "type": "object"
+      },
+      "Body_run_safety_check_api_safety_checks_post": {
+        "properties": {
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "wait_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait S"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "title": "Body_run_safety_check_api_safety_checks_post",
+        "type": "object"
+      },
+      "Body_update_task_api_tasks__task_id__put": {
+        "properties": {
+          "area_file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "Area File",
+            "type": "string"
+          },
+          "cloud_cover_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cloud Cover Pct"
+          },
+          "criterion_alpha": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Criterion Alpha"
+          },
+          "criterion_mode": {
+            "title": "Criterion Mode",
+            "type": "string"
+          },
+          "expected_version": {
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "gsd_cm": {
+            "title": "Gsd Cm",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "survey_type": {
+            "title": "Survey Type",
+            "type": "string"
+          },
+          "wind_speed_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wind Speed Ms"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
+          },
+          "work_date": {
+            "format": "date",
+            "title": "Work Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_version",
+          "name",
+          "survey_type",
+          "gsd_cm",
+          "work_date",
+          "criterion_mode",
+          "area_file"
+        ],
+        "title": "Body_update_task_api_tasks__task_id__put",
+        "type": "object"
+      },
+      "Body_upload_environment_api_environments_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "file"
+        ],
+        "title": "Body_upload_environment_api_environments_post",
+        "type": "object"
+      },
+      "Body_upload_fleet_api_fleet_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_fleet_api_fleet_post",
+        "type": "object"
+      },
+      "EnvironmentDetail": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/LayerCounts"
+          },
+          "errors": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "layers": {
+            "additionalProperties": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "propertyNames": {
+              "enum": [
+                "launch_site",
+                "airspace",
+                "no_fly",
+                "obstacle",
+                "reserve_site"
+              ]
+            },
+            "title": "Layers",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "Корректна",
+              "Содержит ошибки"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "uploaded_at": {
+            "format": "date-time",
+            "title": "Uploaded At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "uploaded_at",
+          "status",
+          "counts",
+          "layers"
+        ],
+        "title": "EnvironmentDetail",
+        "type": "object"
+      },
+      "EnvironmentSummary": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/LayerCounts"
+          },
+          "errors": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "Корректна",
+              "Содержит ошибки"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "uploaded_at": {
+            "format": "date-time",
+            "title": "Uploaded At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "uploaded_at",
+          "status",
+          "counts"
+        ],
+        "title": "EnvironmentSummary",
+        "type": "object"
+      },
+      "FleetDetail": {
+        "properties": {
+          "errors": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FleetIssue"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/FleetInstance"
+            },
+            "title": "Instances",
+            "type": "array"
+          },
+          "ready_count": {
+            "title": "Ready Count",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "Корректна",
+              "Содержит ошибки"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "uploaded_at": {
+            "format": "date-time",
+            "title": "Uploaded At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "uploaded_at",
+          "status",
+          "total",
+          "ready_count",
+          "instances"
+        ],
+        "title": "FleetDetail",
+        "type": "object"
+      },
+      "FleetInstance": {
+        "properties": {
+          "base_launch_site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Launch Site"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "inventory_number": {
+            "title": "Inventory Number",
+            "type": "string"
+          },
+          "model_key": {
+            "title": "Model Key",
+            "type": "string"
+          },
+          "model_name": {
+            "title": "Model Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "valid": {
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "inventory_number",
+          "model_key",
+          "model_name",
+          "status",
+          "valid"
+        ],
+        "title": "FleetInstance",
+        "type": "object"
+      },
+      "FleetIssue": {
+        "properties": {
+          "inventory_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Number"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "FleetIssue",
+        "type": "object"
+      },
+      "FleetSummary": {
+        "properties": {
+          "errors": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FleetIssue"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "ready_count": {
+            "title": "Ready Count",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "Корректна",
+              "Содержит ошибки"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "uploaded_at": {
+            "format": "date-time",
+            "title": "Uploaded At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "uploaded_at",
+          "status",
+          "total",
+          "ready_count"
+        ],
+        "title": "FleetSummary",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "JobInfo": {
+        "properties": {
+          "auto_recalc_count": {
+            "default": 0,
+            "title": "Auto Recalc Count",
+            "type": "integer"
+          },
+          "cancel_requested": {
+            "default": false,
+            "title": "Cancel Requested",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "progress": {
+            "default": 0,
+            "title": "Progress",
+            "type": "integer"
+          },
+          "queued_at": {
+            "format": "date-time",
+            "title": "Queued At",
+            "type": "string"
+          },
+          "result_plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Plan Id"
+          },
+          "result_report_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Report Id"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "task_id",
+          "kind",
+          "status",
+          "queued_at"
+        ],
+        "title": "JobInfo",
+        "type": "object"
+      },
+      "LayerCounts": {
+        "properties": {
+          "airspace": {
+            "default": 0,
+            "title": "Airspace",
+            "type": "integer"
+          },
+          "launch_site": {
+            "default": 0,
+            "title": "Launch Site",
+            "type": "integer"
+          },
+          "no_fly": {
+            "default": 0,
+            "title": "No Fly",
+            "type": "integer"
+          },
+          "obstacle": {
+            "default": 0,
+            "title": "Obstacle",
+            "type": "integer"
+          },
+          "reserve_site": {
+            "default": 0,
+            "title": "Reserve Site",
+            "type": "integer"
+          }
+        },
+        "title": "LayerCounts",
+        "type": "object"
+      },
+      "ModelSpecOut": {
+        "properties": {
+          "comm_range_km": {
+            "title": "Comm Range Km",
+            "type": "number"
+          },
+          "compatible_cameras": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Compatible Cameras",
+            "type": "array"
+          },
+          "height_max_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height Max M"
+          },
+          "height_min_m": {
+            "title": "Height Min M",
+            "type": "number"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "max_flight_time_min": {
+            "title": "Max Flight Time Min",
+            "type": "number"
+          },
+          "max_route_km": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Route Km"
+          },
+          "max_wind_ms": {
+            "title": "Max Wind Ms",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "speed_max_ms": {
+            "title": "Speed Max Ms",
+            "type": "number"
+          },
+          "speed_min_ms": {
+            "title": "Speed Min Ms",
+            "type": "number"
+          },
+          "uav_type": {
+            "title": "Uav Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "uav_type",
+          "speed_min_ms",
+          "speed_max_ms",
+          "max_flight_time_min",
+          "max_route_km",
+          "max_wind_ms",
+          "comm_range_km",
+          "height_min_m",
+          "height_max_m",
+          "compatible_cameras"
+        ],
+        "title": "ModelSpecOut",
+        "type": "object"
+      },
+      "PlanDetail": {
+        "properties": {
+          "budget_s": {
+            "title": "Budget S",
+            "type": "number"
+          },
+          "camera_key": {
+            "title": "Camera Key",
+            "type": "string"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "confirmed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed By"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "criterion_alpha": {
+            "title": "Criterion Alpha",
+            "type": "number"
+          },
+          "criterion_mode": {
+            "title": "Criterion Mode",
+            "type": "string"
+          },
+          "cruise_speed_mps": {
+            "title": "Cruise Speed Mps",
+            "type": "number"
+          },
+          "exported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exported At"
+          },
+          "height_m": {
+            "title": "Height M",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_optimal": {
+            "title": "Is Optimal",
+            "type": "boolean"
+          },
+          "j1_s": {
+            "title": "J1 S",
+            "type": "number"
+          },
+          "j2_s": {
+            "title": "J2 S",
+            "type": "number"
+          },
+          "model_key": {
+            "title": "Model Key",
+            "type": "string"
+          },
+          "sortie_count": {
+            "title": "Sortie Count",
+            "type": "integer"
+          },
+          "sorties": {
+            "items": {
+              "$ref": "#/components/schemas/PlanSortie"
+            },
+            "title": "Sorties",
+            "type": "array"
+          },
+          "status": {
+            "default": "Черновик",
+            "title": "Status",
+            "type": "string"
+          },
+          "swath_m": {
+            "title": "Swath M",
+            "type": "number"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "uav_model": {
+            "title": "Uav Model",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "task_id",
+          "version",
+          "created_at",
+          "criterion_mode",
+          "criterion_alpha",
+          "j1_s",
+          "j2_s",
+          "is_optimal",
+          "uav_model",
+          "sortie_count",
+          "model_key",
+          "camera_key",
+          "height_m",
+          "swath_m",
+          "cruise_speed_mps",
+          "budget_s",
+          "sorties"
+        ],
+        "title": "PlanDetail",
+        "type": "object"
+      },
+      "PlanSortie": {
+        "properties": {
+          "distance_m": {
+            "title": "Distance M",
+            "type": "number"
+          },
+          "end_utc": {
+            "format": "date-time",
+            "title": "End Utc",
+            "type": "string"
+          },
+          "flight_time_s": {
+            "title": "Flight Time S",
+            "type": "number"
+          },
+          "landing_site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landing Site"
+          },
+          "sortie_index": {
+            "title": "Sortie Index",
+            "type": "integer"
+          },
+          "start_utc": {
+            "format": "date-time",
+            "title": "Start Utc",
+            "type": "string"
+          },
+          "survey_tracks_geojson": {
+            "additionalProperties": true,
+            "title": "Survey Tracks Geojson",
+            "type": "object"
+          },
+          "takeoff_site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Takeoff Site"
+          },
+          "track_geojson": {
+            "additionalProperties": true,
+            "title": "Track Geojson",
+            "type": "object"
+          },
+          "uav_id": {
+            "title": "Uav Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uav_id",
+          "sortie_index",
+          "start_utc",
+          "end_utc",
+          "flight_time_s",
+          "distance_m",
+          "track_geojson",
+          "survey_tracks_geojson"
+        ],
+        "title": "PlanSortie",
+        "type": "object"
+      },
+      "PlanSummary": {
+        "properties": {
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "confirmed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed By"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "criterion_alpha": {
+            "title": "Criterion Alpha",
+            "type": "number"
+          },
+          "criterion_mode": {
+            "title": "Criterion Mode",
+            "type": "string"
+          },
+          "exported_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exported At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_optimal": {
+            "title": "Is Optimal",
+            "type": "boolean"
+          },
+          "j1_s": {
+            "title": "J1 S",
+            "type": "number"
+          },
+          "j2_s": {
+            "title": "J2 S",
+            "type": "number"
+          },
+          "sortie_count": {
+            "title": "Sortie Count",
+            "type": "integer"
+          },
+          "status": {
+            "default": "Черновик",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "uav_model": {
+            "title": "Uav Model",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "task_id",
+          "version",
+          "created_at",
+          "criterion_mode",
+          "criterion_alpha",
+          "j1_s",
+          "j2_s",
+          "is_optimal",
+          "uav_model",
+          "sortie_count"
+        ],
+        "title": "PlanSummary",
+        "type": "object"
+      },
+      "SafetyCheckOut": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "violations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Violations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "passed"
+        ],
+        "title": "SafetyCheckOut",
+        "type": "object"
+      },
+      "SafetyReport": {
+        "properties": {
+          "auto_recalc_count": {
+            "title": "Auto Recalc Count",
+            "type": "integer"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/SafetyCheckOut"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "Пройдена",
+              "Есть нарушения"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "plan_id",
+          "task_id",
+          "created_at",
+          "status",
+          "checks",
+          "auto_recalc_count"
+        ],
+        "title": "SafetyReport",
+        "type": "object"
+      },
+      "TaskDetail": {
+        "properties": {
+          "area": {
+            "additionalProperties": true,
+            "title": "Area",
+            "type": "object"
+          },
+          "cloud_cover_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cloud Cover Pct"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "criterion_alpha": {
+            "title": "Criterion Alpha",
+            "type": "number"
+          },
+          "criterion_mode": {
+            "enum": [
+              "Время",
+              "Налет",
+              "Компромисс"
+            ],
+            "title": "Criterion Mode",
+            "type": "string"
+          },
+          "daylight_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daylight Warning"
+          },
+          "environment_id": {
+            "title": "Environment Id",
+            "type": "string"
+          },
+          "environment_name": {
+            "title": "Environment Name",
+            "type": "string"
+          },
+          "gsd_cm": {
+            "title": "Gsd Cm",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "Черновик",
+              "Рассчитана",
+              "Подтверждена"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "survey_type": {
+            "enum": [
+              "RGB",
+              "мультиспектральная",
+              "ИК",
+              "LiDAR",
+              "геофизическая"
+            ],
+            "title": "Survey Type",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "wind_speed_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wind Speed Ms"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "format": "time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
+          },
+          "work_date": {
+            "format": "date",
+            "title": "Work Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "environment_id",
+          "environment_name",
+          "survey_type",
+          "work_date",
+          "status",
+          "version",
+          "created_at",
+          "updated_at",
+          "gsd_cm",
+          "window_start",
+          "window_end",
+          "wind_speed_ms",
+          "cloud_cover_pct",
+          "criterion_mode",
+          "criterion_alpha",
+          "area"
+        ],
+        "title": "TaskDetail",
+        "type": "object"
+      },
+      "TaskSummary": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "daylight_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daylight Warning"
+          },
+          "environment_id": {
+            "title": "Environment Id",
+            "type": "string"
+          },
+          "environment_name": {
+            "title": "Environment Name",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "Черновик",
+              "Рассчитана",
+              "Подтверждена"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "survey_type": {
+            "enum": [
+              "RGB",
+              "мультиспектральная",
+              "ИК",
+              "LiDAR",
+              "геофизическая"
+            ],
+            "title": "Survey Type",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "work_date": {
+            "format": "date",
+            "title": "Work Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "environment_id",
+          "environment_name",
+          "survey_type",
+          "work_date",
+          "status",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TaskSummary",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "ValidationIssue": {
+        "properties": {
+          "feature_index": {
+            "title": "Feature Index",
+            "type": "integer"
+          },
+          "layer": {
+            "enum": [
+              "launch_site",
+              "airspace",
+              "no_fly",
+              "obstacle",
+              "reserve_site"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "required": [
+          "layer",
+          "feature_index",
+          "message"
+        ],
+        "title": "ValidationIssue",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Галс — планировщик БВС",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/environments": {
+      "get": {
+        "operationId": "list_environments_api_environments_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EnvironmentSummary"
+                  },
+                  "title": "Response List Environments Api Environments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Environments",
+        "tags": [
+          "environments"
+        ]
+      },
+      "post": {
+        "operationId": "upload_environment_api_environments_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_environment_api_environments_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/environments/{environment_id}": {
+      "get": {
+        "operationId": "get_environment_api_environments__environment_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "environment_id",
+            "required": true,
+            "schema": {
+              "title": "Environment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/fleet": {
+      "get": {
+        "operationId": "get_fleet_api_fleet_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Fleet",
+        "tags": [
+          "fleet"
+        ]
+      },
+      "post": {
+        "operationId": "upload_fleet_api_fleet_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_fleet_api_fleet_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Fleet",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleet/models": {
+      "get": {
+        "operationId": "get_fleet_models_api_fleet_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ModelSpecOut"
+                  },
+                  "title": "Response Get Fleet Models Api Fleet Models Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Fleet Models",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Health Api Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/health/ready": {
+      "get": {
+        "operationId": "ready_api_health_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ready",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/plan-jobs": {
+      "get": {
+        "operationId": "list_plan_jobs_api_plan_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobInfo"
+                  },
+                  "title": "Response List Plan Jobs Api Plan Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Plan Jobs",
+        "tags": [
+          "plan-jobs"
+        ]
+      }
+    },
+    "/api/plan-jobs/{job_id}": {
+      "get": {
+        "operationId": "get_plan_job_api_plan_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Plan Job",
+        "tags": [
+          "plan-jobs"
+        ]
+      }
+    },
+    "/api/plan-jobs/{job_id}/cancel": {
+      "post": {
+        "description": "Отмена расчета. Идемпотентна: отмена завершенной работы — не ошибка,\nоператор мог нажать кнопку ровно в момент завершения.",
+        "operationId": "cancel_plan_job_api_plan_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Plan Job",
+        "tags": [
+          "plan-jobs"
+        ]
+      }
+    },
+    "/api/plans": {
+      "get": {
+        "operationId": "list_plans_api_plans_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlanSummary"
+                  },
+                  "title": "Response List Plans Api Plans Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Plans",
+        "tags": [
+          "plans"
+        ]
+      },
+      "post": {
+        "operationId": "create_plan_api_plans_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_plan_api_plans_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Plan",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/api/plans/{plan_id}": {
+      "get": {
+        "operationId": "get_plan_api_plans__plan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Plan",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/api/plans/{plan_id}/confirm": {
+      "post": {
+        "description": "ЭКС.ФТ.6 «Подтвердить». 409 при конфликте — с именем подтвердившего.",
+        "operationId": "confirm_plan_api_plans__plan_id__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Plan",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/api/plans/{plan_id}/export": {
+      "get": {
+        "description": "ЭКС.ФТ.7-8: файл по одному БВС (или сводный по группе).",
+        "operationId": "export_plan_api_plans__plan_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "формат файла",
+            "in": "query",
+            "name": "format",
+            "required": true,
+            "schema": {
+              "description": "формат файла",
+              "enum": [
+                "kml",
+                "geojson"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "description": "БВС; без него — вся группа",
+            "in": "query",
+            "name": "uav_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "БВС; без него — вся группа",
+              "title": "Uav Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Plan",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/api/plans/{plan_id}/export/all": {
+      "get": {
+        "description": "ЭКС.ФТ.7 «Скачать все» — архив с KML и GeoJSON по каждому БВС группы.",
+        "operationId": "export_plan_archive_api_plans__plan_id__export_all_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Plan Archive",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/api/safety-checks": {
+      "post": {
+        "operationId": "run_safety_check_api_safety_checks_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_run_safety_check_api_safety_checks_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Safety Check",
+        "tags": [
+          "safety"
+        ]
+      }
+    },
+    "/api/safety-checks/latest": {
+      "get": {
+        "operationId": "get_latest_safety_check_api_safety_checks_latest_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SafetyReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Latest Safety Check",
+        "tags": [
+          "safety"
+        ]
+      }
+    },
+    "/api/safety-checks/recheck": {
+      "post": {
+        "description": "БЕЗ.ФТ.6 «Повторить проверку» — без автоматического пересчета.",
+        "operationId": "recheck_safety_check_api_safety_checks_recheck_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_recheck_safety_check_api_safety_checks_recheck_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SafetyReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recheck Safety Check",
+        "tags": [
+          "safety"
+        ]
+      }
+    },
+    "/api/tasks": {
+      "get": {
+        "operationId": "list_tasks_api_tasks_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "environment_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Environment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TaskSummary"
+                  },
+                  "title": "Response List Tasks Api Tasks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Tasks",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "post": {
+        "operationId": "create_task_api_tasks_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_task_api_tasks_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}": {
+      "get": {
+        "operationId": "get_task_api_tasks__task_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Task",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "put": {
+        "operationId": "update_task_api_tasks__task_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_update_task_api_tasks__task_id__put"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    }
+  }
+}

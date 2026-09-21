@@ -74,15 +74,27 @@ def _time_to_hours(t) -> float | None:
     return None if t is None else t.hour + t.minute / 60.0 + t.second / 3600.0
 
 
-def _combine(name: str, results: list[CheckResult]) -> SafetyCheckOut:
+def sortie_label(sortie) -> str:
+    """Подпись вылета для сообщения о нарушении.
+
+    БЕЗ.ФТ.4 требует показать при нарушении идентификатор БВС и вылета, а
+    чистые проверки его не знают: они работают с геометрией и возвращают
+    только причину. Приписывает подпись оркестратор — он единственный, кто
+    видит, чей это вылет. Заодно это делает нарушение адресуемым на карте
+    (ИНТ.ФТ.14): по подписи фронтенд находит маршрут.
+    """
+    return f"{sortie.uav_id} · вылет {sortie.sortie_index + 1}"
+
+
+def _combine(name: str, results: list[tuple[str | None, CheckResult]]) -> SafetyCheckOut:
     violations: list[str] = []
-    for r in results:
-        violations.extend(r.violations)
+    for label, r in results:
+        violations.extend(f"{label}: {v}" if label else v for v in r.violations)
     unique = list(dict.fromkeys(violations))
     shown = unique[:5]
     if len(unique) > 5:
         shown.append(f"...и еще {len(unique) - 5} нарушени(й)")
-    passed = all(r.passed for r in results) if results else True
+    passed = all(r.passed for _, r in results) if results else True
     return SafetyCheckOut(name=name, label=_LABELS[name], passed=passed, violations=shown)
 
 
@@ -132,37 +144,47 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
     window_start_hour = _time_to_hours(task.window_start) or 0.0
     window_end_hour = _time_to_hours(task.window_end) or 24.0
 
-    geozone_results: list[CheckResult] = []
-    airspace_results: list[CheckResult] = []
-    energy_results: list[CheckResult] = []
-    reachability_results: list[CheckResult] = []
-    daylight_results: list[CheckResult] = []
+    # Пара (подпись вылета, результат): подпись нужна сообщению БЕЗ.ФТ.4.
+    geozone_results: list[tuple[str | None, CheckResult]] = []
+    airspace_results: list[tuple[str | None, CheckResult]] = []
+    energy_results: list[tuple[str | None, CheckResult]] = []
+    reachability_results: list[tuple[str | None, CheckResult]] = []
+    daylight_results: list[tuple[str | None, CheckResult]] = []
     sortie_tracks: list[SortieTrack] = []
     all_survey_tracks_utm: list[BaseGeometry] = []
 
     for sortie in plan.sorties:
+        label = sortie_label(sortie)
         route_utm = projector.to_utm(shape(sortie.track_geojson))
         survey_utm = projector.to_utm(shape(sortie.survey_tracks_geojson))
         all_survey_tracks_utm.extend(
             list(survey_utm.geoms) if survey_utm.geom_type == "MultiLineString" else [survey_utm]
         )
 
-        geozone_results.append(check_geozones(route_utm, no_fly_footprints, obstacle_footprints))
+        geozone_results.append(
+            (label, check_geozones(route_utm, no_fly_footprints, obstacle_footprints))
+        )
 
         if allowed_union is None:
-            airspace_results.append(CheckResult("airspace", False, (
+            airspace_results.append((None, CheckResult("airspace", False, (
                 "в обстановке нет ни одной зоны разрешенного воздушного пространства",
-            )))
+            ))))
         else:
-            airspace_results.append(check_allowed_space(route_utm, allowed_union))
+            airspace_results.append((label, check_allowed_space(route_utm, allowed_union)))
 
-        energy_results.append(check_energy(route_utm.length, plan.cruise_speed_mps, plan.budget_s))
-        reachability_results.append(
-            check_reachability(route_utm, landing_points, plan.cruise_speed_mps, plan.budget_s)
+        energy_results.append(
+            (label, check_energy(route_utm.length, plan.cruise_speed_mps, plan.budget_s))
         )
-        daylight_results.append(
-            check_daylight(sortie.start_utc, sortie.end_utc, lat, lon, window_start_hour, window_end_hour)
-        )
+        reachability_results.append((
+            label,
+            check_reachability(route_utm, landing_points, plan.cruise_speed_mps, plan.budget_s),
+        ))
+        daylight_results.append((
+            label,
+            check_daylight(
+                sortie.start_utc, sortie.end_utc, lat, lon, window_start_hour, window_end_hour
+            ),
+        ))
         sortie_tracks.append(SortieTrack(
             uav_id=sortie.uav_id, route=route_utm,
             start_utc=sortie.start_utc, end_utc=sortie.end_utc,

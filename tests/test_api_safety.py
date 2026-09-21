@@ -157,3 +157,22 @@ def test_safety_check_reachability_fails_without_landing_site(client):
     body = resp.json()
     reachability = next(c for c in body["checks"] if c["name"] == "reachability")
     assert reachability["passed"] is False
+
+
+def test_violation_names_the_uav_and_sortie(client):
+    """БЕЗ.ФТ.4: при нарушении показывается идентификатор БВС и вылета.
+
+    Чистые проверки идентификаторов не знают — их приписывает оркестратор,
+    единственный, кто видит, чей это вылет. Это же делает нарушение
+    адресуемым на карте (ИНТ.ФТ.14).
+    """
+    plan_id = _make_plan(client, no_fly=True, n_fleet=1)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+
+    geozones = next(c for c in report["checks"] if c["name"] == "geozones")
+    assert geozones["passed"] is False
+    plan = client.get(f"/api/plans/{report['plan_id']}").json()
+    uav_id = plan["sorties"][0]["uav_id"]
+    assert all(
+        v.startswith(f"{uav_id} · вылет ") for v in geozones["violations"] if not v.startswith("...")
+    ), geozones["violations"]

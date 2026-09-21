@@ -1,8 +1,9 @@
 # Полный запуск сервиса «Галс»: docker compose up --build
 #
-# Состав растет по мере реализации плана обертки: сейчас поднимаются db,
-# redis, одноразовый накат миграций, api (он же пока отдает фронтенд) и
-# worker (фоновый расчет). Дальше добавится web (SPA за nginx).
+# Состав: db (PostGIS), redis, одноразовый накат миграций, api, worker
+# (фоновый расчет) и web (SPA за nginx). SPA открывается на WEB_PORT (8080),
+# legacy-интерфейс пока остается на API_PORT — разные порты, чтобы cutover
+# был правкой compose, а не перенастройкой роутинга.
 
 services:
   db:
@@ -130,6 +131,21 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+    restart: unless-stopped
+
+  # SPA за nginx. Тот же origin для /api, поэтому CORS в FastAPI не нужен.
+  web:
+    build:
+      context: ./web
+      args:
+        # Пусто — карта работает без тайлов (закрытый контур). Значение
+        # попадает в бандл на сборке, поменять его в рантайме нельзя.
+        VITE_TILE_URL: ${VITE_TILE_URL:-}
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
