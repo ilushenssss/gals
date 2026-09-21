@@ -211,6 +211,10 @@ def _store_report(original_plan_id: str, plan: PlanDetail, task, checks: list[Sa
         checks=checks, auto_recalc_count=attempts,
     )
     repositories.safety.add_report([original_plan_id, plan.id], report)
+    # ЭКС.ФТ.5: «Проверен» означает, что проверка выполнена и результат
+    # известен, — независимо от того, есть нарушения или нет. Подтверждение
+    # блокирует не статус плана, а статус самого отчета (ЭКС.ФТ.2).
+    repositories.plans.mark_checked(plan.id)
     return report
 
 

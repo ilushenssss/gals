@@ -36,6 +36,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from uav_planner import repositories
+from uav_planner.domain.errors import ConflictError, ValidationError
 from uav_planner.domain.errors import PlanInfeasibleError as _DomainPlanInfeasibleError
 from uav_planner.camera import CAMERA_SPECS, CameraError, plan_survey_geometry
 from uav_planner.coverage import boustrophedon_cells, generate_tracks, split_long_track
@@ -74,6 +75,31 @@ _SUMMARY_ONLY_EXCLUDE = {"sorties"}
 
 class PlanInfeasibleError(_DomainPlanInfeasibleError):
     """Задачу невозможно рассчитать в текущем виде (ПЛН.ФТ.10)."""
+
+
+class PlanNotConfirmableError(ValidationError):
+    """Предусловие ЭКС.ФТ.2 не выполнено — подтверждать нечего."""
+
+
+class PlanConfirmConflictError(ConflictError):
+    """ЭКС.ФТ.9: план уже подтвержден кем-то другим.
+
+    Несет актуальную карточку плана: второму оператору нужно показать не
+    только отказ, но и кто и когда подтвердил, и обновить интерфейс без
+    повторного подтверждения.
+    """
+
+    def __init__(self, plan: PlanDetail):
+        self.plan = plan
+        who = plan.confirmed_by or "другой пользователь"
+        if plan.status in ("Подтвержден", "Выгружен"):
+            message = f"План уже подтвержден пользователем ({who})"
+        else:
+            message = (
+                f"План нельзя подтвердить в статусе «{plan.status}» — "
+                "сначала выполните проверку безопасности"
+            )
+        super().__init__(message)
 
 
 def _to_summary(detail: PlanDetail) -> PlanSummary:
@@ -347,3 +373,39 @@ def get_plan(plan_id: str) -> PlanDetail:
 def get_plan_summary(plan_id: str) -> PlanSummary:
     """Карточка плана без вылетов — то, что отдает ответ на запуск расчета."""
     return _to_summary(repositories.plans.get(plan_id))
+
+
+def confirm_plan(plan_id: str, user: str) -> PlanSummary:
+    """ЭКС.ФТ.6: ручное подтверждение плана оператором.
+
+    Два условия, и они разной природы. Предусловие ЭКС.ФТ.2 — «последняя
+    проверка безопасности выполнена и не содержит нарушений» — проверяется
+    чтением отчета: это правило предметной области, и его нарушение означает,
+    что оператору вообще не следовало показывать кнопку. Само же изменение
+    статуса делается условным ``UPDATE ... WHERE status = 'Проверен'`` в
+    репозитории: это защита от гонки (ЭКС.ФТ.9), а не от неверного состояния,
+    и читать-проверять-писать здесь нельзя в принципе.
+    """
+    plan = repositories.plans.get(plan_id)
+    report = repositories.safety.latest_report(plan_id)
+    if report is None:
+        raise PlanNotConfirmableError(
+            "план не подтверждается: проверка безопасности еще не выполнялась"
+        )
+    if report.plan_id != plan.id:
+        # Отчет относится к другой версии (после автопересчета БЕЗ.ФТ.3
+        # запрошенная и проверенная версии расходятся).
+        raise PlanNotConfirmableError(
+            "план не подтверждается: последняя проверка относится к другой версии плана "
+            f"(версия {plan.version} не проверялась)"
+        )
+    if report.status != "Пройдена":
+        raise PlanNotConfirmableError(
+            "план не подтверждается: последняя проверка безопасности содержит нарушения"
+        )
+
+    confirmed = repositories.plans.confirm(plan_id, user)
+    if confirmed is None:
+        actual = repositories.plans.get(plan_id)
+        raise PlanConfirmConflictError(actual)
+    return _to_summary(confirmed)

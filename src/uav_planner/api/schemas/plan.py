@@ -34,6 +34,13 @@ class PlanSummary(BaseModel):
     uav_model: str
     sortie_count: int
     warnings: list[str] = []
+    # Жизненный цикл ЭКС.ФТ.5: Черновик -> Проверен -> Подтвержден -> Выгружен.
+    # Статус карточки плана, не результат проверки: план со статусом «Проверен»
+    # может содержать нарушения — тогда подтверждение запрещено (ЭКС.ФТ.2).
+    status: str = "Черновик"
+    confirmed_at: Optional[datetime] = None
+    confirmed_by: Optional[str] = None  # ФИО из X-User-Name, нужен сообщению ЭКС.ФТ.9
+    exported_at: Optional[datetime] = None
 
 
 class PlanDetail(PlanSummary):

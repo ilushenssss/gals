@@ -32,7 +32,7 @@ from uav_planner.models.job import (
     STATUS_RUNNING,
     PlanJob,
 )
-from uav_planner.models.plan import Plan
+from uav_planner.models.plan import ExportArtifact, Plan
 from uav_planner.models.safety import SafetyAttemptCounter, SafetyReport as SafetyReportRow
 from uav_planner.models.task import Task
 
@@ -163,6 +163,73 @@ class PlanRepository:
             return self.get(plan_id)
         except KeyError:
             return None
+
+    def mark_checked(self, plan_id: str) -> None:
+        """Черновик -> Проверен после выполненной проверки безопасности.
+
+        Условие по статусу обязательно (ЭКС.ФТ.3): повторная проверка уже
+        подтвержденного или выгруженного плана не должна откатывать его
+        жизненный цикл назад.
+        """
+        key = _uuid_or_none(plan_id)
+        if key is None:
+            return
+        current_session().execute(
+            update(Plan)
+            .where(Plan.id == key, Plan.status == "Черновик")
+            .values(status="Проверен")
+        )
+
+    def confirm(self, plan_id: str, user: str) -> PlanDetail | None:
+        """ЭКС.ФТ.6/ФТ.9: условное подтверждение. None — статус был не тот.
+
+        Именно условный ``UPDATE ... WHERE status = 'Проверен'``, а не «прочитать
+        и записать»: при одновременном подтверждении двумя операторами выигрывает
+        первый, второй обязан получить отказ с актуальным статусом и именем.
+        """
+        key = _uuid_or_none(plan_id)
+        if key is None:
+            raise KeyError(plan_id)
+        updated = current_session().execute(
+            update(Plan)
+            .where(Plan.id == key, Plan.status == "Проверен")
+            .values(
+                status="Подтвержден",
+                confirmed_at=datetime.now(timezone.utc),
+                confirmed_by=user,
+            )
+            .returning(Plan.id)
+        ).scalar_one_or_none()
+        if updated is None:
+            return None
+        current_session().expire_all()
+        return self.get(plan_id)
+
+    def record_export(
+        self, plan_id: str, uav_id: str | None, fmt: str, filename: str, user: str
+    ) -> None:
+        """Журнал выгрузок (ЭКС.ФТ.7) и перевод плана в «Выгружен».
+
+        Статус меняется только на первой выгрузке — условным ``UPDATE`` из
+        «Подтвержден»; повторные скачивания лишь дописывают журнал.
+        """
+        key = _uuid_or_none(plan_id)
+        if key is None:
+            raise KeyError(plan_id)
+        session = current_session()
+        now = datetime.now(timezone.utc)
+        session.add(
+            ExportArtifact(
+                plan_id=key, uav_id=uav_id, format=fmt,
+                filename=filename, created_at=now, created_by=user,
+            )
+        )
+        session.execute(
+            update(Plan)
+            .where(Plan.id == key, Plan.status == "Подтвержден")
+            .values(status="Выгружен", exported_at=now)
+        )
+        session.flush()
 
     def list_by_task_newest_first(self, task_id: str) -> list[PlanDetail]:
         key = _uuid_or_none(task_id)

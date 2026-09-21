@@ -13,12 +13,21 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Form, Header, HTTPException, Response
+from typing import Annotated, Literal
+from urllib.parse import quote
 
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Response
+
+from uav_planner.api.deps import current_user
 from uav_planner.api.schemas.job import JobAccepted
 from uav_planner.api.schemas.plan import PlanDetail, PlanSummary
 from uav_planner.config import get_settings
-from uav_planner.services import job_service, plan_service, task_service
+from uav_planner.services import export_service, job_service, plan_service, task_service
+from uav_planner.services.export_service import ExportError, ExportNotAllowedError
+from uav_planner.services.plan_service import (
+    PlanConfirmConflictError,
+    PlanNotConfirmableError,
+)
 
 router = APIRouter(prefix="/api", tags=["plans"])
 
@@ -68,3 +77,72 @@ def get_plan(plan_id: str) -> PlanDetail:
         return plan_service.get_plan(plan_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="план не найден")
+
+
+# --- модуль «Подтверждение и экспорт», ЭКС.ФТ.6-9 ---------------------------
+
+
+@router.post("/plans/{plan_id}/confirm", response_model=PlanSummary)
+def confirm_plan(
+    plan_id: str, user: Annotated[str, Depends(current_user)]
+) -> PlanSummary:
+    """ЭКС.ФТ.6 «Подтвердить». 409 при конфликте — с именем подтвердившего."""
+    try:
+        return plan_service.confirm_plan(plan_id, user)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="план не найден")
+    except PlanNotConfirmableError as exc:
+        # Предусловие ЭКС.ФТ.2 не выполнено: кнопки «Подтвердить» вообще не
+        # должно было быть, поэтому это ошибка запроса, а не конфликт.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PlanConfirmConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), "plan": exc.plan.model_dump(mode="json", exclude={"sorties"})},
+        ) from exc
+
+
+def _attachment(filename: str) -> str:
+    """Content-Disposition по RFC 5987.
+
+    Инвентарные номера БВС бывают кириллическими, и обычный ``filename=``
+    браузеры в этом случае портят. ASCII-вариант оставлен запасным для
+    клиентов, не понимающих ``filename*``.
+    """
+    ascii_fallback = filename.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(filename)}"
+
+
+@router.get("/plans/{plan_id}/export")
+def export_plan(
+    plan_id: str,
+    user: Annotated[str, Depends(current_user)],
+    format: Literal["kml", "geojson"] = Query(..., description="формат файла"),
+    uav_id: str | None = Query(default=None, description="БВС; без него — вся группа"),
+) -> Response:
+    """ЭКС.ФТ.7-8: файл по одному БВС (или сводный по группе)."""
+    return _export_response(plan_id, format, uav_id, user)
+
+
+@router.get("/plans/{plan_id}/export/all")
+def export_plan_archive(
+    plan_id: str, user: Annotated[str, Depends(current_user)]
+) -> Response:
+    """ЭКС.ФТ.7 «Скачать все» — архив с KML и GeoJSON по каждому БВС группы."""
+    return _export_response(plan_id, "zip", None, user)
+
+
+def _export_response(plan_id: str, fmt: str, uav_id: str | None, user: str) -> Response:
+    try:
+        content, filename, media_type = export_service.export_plan(plan_id, fmt, uav_id, user)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="план не найден")
+    except ExportNotAllowedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ExportError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": _attachment(filename)},
+    )
