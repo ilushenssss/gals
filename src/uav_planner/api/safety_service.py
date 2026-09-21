@@ -59,7 +59,14 @@ _LABELS = {
 }
 
 _reports_by_plan: dict[str, list[SafetyReport]] = {}
+_reports_by_id: dict[str, SafetyReport] = {}
 _attempts_by_task_version: dict[tuple[str, int], int] = {}
+
+
+class ViolationNotFoundError(KeyError):
+    """Нарушение с таким id не найдено в этом отчете (устаревшая ссылка,
+    например, после нового расчета/перепроверки — отчет пересобирается заново,
+    старые id не сохраняются, см. docstring ``set_violation_ignored``)."""
 
 
 class SafetyCheckError(ValueError):
@@ -74,11 +81,11 @@ def _time_to_hours(t) -> float | None:
     return None if t is None else t.hour + t.minute / 60.0 + t.second / 3600.0
 
 
-def _violation_out(v: Violation, projector: Projector) -> ViolationOut:
+def _violation_out(v: Violation, projector: Projector, violation_id: str) -> ViolationOut:
     if v.point is None:
-        return ViolationOut(message=v.message)
+        return ViolationOut(id=violation_id, message=v.message)
     wgs = projector.to_wgs84(v.point)
-    return ViolationOut(message=v.message, lat=wgs.y, lon=wgs.x)
+    return ViolationOut(id=violation_id, message=v.message, lat=wgs.y, lon=wgs.x)
 
 
 def _combine(name: str, results: list[CheckResult], projector: Projector) -> SafetyCheckOut:
@@ -94,7 +101,7 @@ def _combine(name: str, results: list[CheckResult], projector: Projector) -> Saf
     passed = all(r.passed for r in results) if results else True
     return SafetyCheckOut(
         name=name, label=_LABELS[name], passed=passed,
-        violations=[_violation_out(v, projector) for v in shown],
+        violations=[_violation_out(v, projector, f"{name}__{i}") for i, v in enumerate(shown)],
     )
 
 
@@ -203,12 +210,12 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         _combine("reachability", reachability_results, projector),
         SafetyCheckOut(
             name="coverage", label=_LABELS["coverage"], passed=coverage_result.passed,
-            violations=[_violation_out(v, projector) for v in coverage_result.violations],
+            violations=[_violation_out(v, projector, f"coverage__{i}") for i, v in enumerate(coverage_result.violations)],
         ),
         _combine("daylight", daylight_results, projector),
         SafetyCheckOut(
             name="separation", label=_LABELS["separation"], passed=separation_result.passed,
-            violations=[_violation_out(v, projector) for v in separation_result.violations],
+            violations=[_violation_out(v, projector, f"separation__{i}") for i, v in enumerate(separation_result.violations)],
         ),
     ]
 
@@ -236,6 +243,11 @@ def _store_report(original_plan_id: str, plan: PlanDetail, task, checks: list[Sa
     _reports_by_plan.setdefault(original_plan_id, []).append(report)
     if plan.id != original_plan_id:
         _reports_by_plan.setdefault(plan.id, []).append(report)
+    _reports_by_id[report.id] = report
+    # ЭКС.ФТ.5: статус плана («Черновик» -> «Проверен») ведет модуль
+    # «Подтверждение и экспорт» через plan_service — сам этот модуль
+    # (safety) о жизненном цикле плана после проверки ничего не знает.
+    plan_service.mark_reviewed(plan.id, report.status == "Пройдена")
     return report
 
 
@@ -287,3 +299,43 @@ def get_latest_report(plan_id: str) -> SafetyReport:
     if not reports:
         raise KeyError(f"для плана {plan_id} еще не выполнялась проверка безопасности")
     return reports[-1]
+
+
+def set_violation_ignored(report_id: str, violation_id: str, ignored: bool) -> SafetyReport:
+    """Оператор осознанно принимает (или отменяет принятие) риск конкретного
+    нарушения — по запросу пользователя, расширение поверх ЭКС.ФТ.2: план с
+    нарушениями обычно подтвердить нельзя, но если оператор явно отметил
+    КАЖДОЕ нарушение отчета как принятое, подтверждение разблокируется (см.
+    ``SafetyReport.violations_acknowledged``, ``plan_service.confirm_plan``).
+
+    Область действия — конкретный отчет (``report_id``), а не план или его
+    версия целиком: новый расчет или повторная проверка (БЕЗ.ФТ.3/6) строят
+    отчет заново, с новыми объектами нарушений — прежние id и отметки
+    «принято» не переносятся автоматически. Это осознанное решение, а не
+    недоработка: то, что оператор принял риск для одних условий, не должно
+    молча считаться принятым для другого пересчитанного результата."""
+    report = _reports_by_id.get(report_id)
+    if report is None:
+        raise KeyError(f"отчет {report_id} не найден")
+
+    found = False
+    new_checks: list[SafetyCheckOut] = []
+    for check in report.checks:
+        new_violations = []
+        for v in check.violations:
+            if v.id == violation_id:
+                found = True
+                v = v.model_copy(update={"ignored": ignored})
+            new_violations.append(v)
+        new_checks.append(check.model_copy(update={"violations": new_violations}))
+    if not found:
+        raise ViolationNotFoundError(f"нарушение {violation_id} не найдено в отчете {report_id}")
+
+    all_violations = [v for c in new_checks for v in c.violations]
+    acknowledged = bool(all_violations) and all(v.ignored for v in all_violations)
+    updated = report.model_copy(update={"checks": new_checks, "violations_acknowledged": acknowledged})
+
+    _reports_by_id[report_id] = updated
+    for plan_id, reports in _reports_by_plan.items():
+        _reports_by_plan[plan_id] = [updated if r.id == report_id else r for r in reports]
+    return updated

@@ -29,6 +29,11 @@ class TaskSummary(BaseModel):
     name: str
     environment_id: str
     environment_name: str
+    # Парк БВС, выбранный для этой задачи (ЗАД: теперь парков несколько,
+    # выбор — часть постановки задачи; совместимость с обстановкой по
+    # расстоянию проверена при создании, см. task_service._validate).
+    fleet_id: str
+    fleet_name: str
     survey_type: SurveyType
     work_date: date
     status: TaskStatus
@@ -36,6 +41,10 @@ class TaskSummary(BaseModel):
     daylight_warning: str | None = None
     created_at: datetime
     updated_at: datetime
+    # GeoJSON geometry, WGS-84 — в сводке (не только в детали), чтобы список задач
+    # мог отрисовать миниатюру области на карточке без отдельного запроса на
+    # каждую задачу (ИНТ: галерея карточек списка задач).
+    area: dict[str, Any]
 
 
 class TaskDetail(TaskSummary):
@@ -46,4 +55,3 @@ class TaskDetail(TaskSummary):
     cloud_cover_pct: float | None
     criterion_mode: CriterionMode
     criterion_alpha: float
-    area: dict[str, Any]  # GeoJSON geometry, WGS-84

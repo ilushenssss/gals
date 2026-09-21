@@ -1,5 +1,12 @@
-"""Логика модуля «Парк БВС»: ПБС.ФТ.2-4 (проверки при загрузке), ПБС.ФТ.11
-(загрузка, заменяющая текущий парк). См. docs/trebovania/Парк_БВС.md.
+"""Логика модуля «Парк БВС»: ПБС.ФТ.2-4 (проверки при загрузке экземпляров).
+См. docs/trebovania/Парк_БВС.md.
+
+v1-расширение по запросу пользователя: парков теперь несколько, каждый —
+отдельная именованная сущность со своей локацией (не единственный глобальный
+парк, который загрузка заменяла целиком, как было в ПБС.ФТ.11 изначально) —
+``_fleets`` хранит их все, ключ — id парка. Локация парка не вводится вручную
+при создании, а определяется из самого файла (см. ``_derive_fleet_location``)
+— центроид координат экземпляров, у которых они указаны.
 
 Формат файла — JSON-массив объектов или CSV с колонками: ``inventory_number``,
 ``model`` (ключ из справочника ``FLEET_MODELS``, например ``geoscan-201``),
@@ -23,7 +30,7 @@ from uav_planner.fleet import FLEET_MODELS, READINESS_STATUSES
 
 from .fleet_models import FleetDetail, FleetInstance, FleetIssue, FleetSummary
 
-_fleet: FleetDetail | None = None
+_fleets: dict[str, FleetDetail] = {}
 
 
 def _parse_records(raw: bytes) -> list[dict[str, Any]]:
@@ -62,7 +69,32 @@ def _parse_location(rec: dict[str, Any]) -> tuple[float | None, float | None, st
     return lat, lon, None
 
 
-def validate_and_store(raw: bytes) -> FleetSummary:
+class FleetLocationError(ValueError):
+    """Не удалось определить локацию парка по файлу (ни у одного экземпляра
+    не указаны координаты) — см. ``_derive_fleet_location``."""
+
+
+def _derive_fleet_location(instances: list[FleetInstance]) -> tuple[float, float]:
+    """Локация парка в целом — по запросу пользователя определяется из самого
+    файла парка (координаты экземпляров), а не вводится вручную: центроид
+    (среднее) локаций всех экземпляров, у которых она указана и корректна
+    (``FleetInstance.location_lat/lon`` — уже провалидированы `_parse_location`
+    выше на этапе разбора записей). Простое среднее, без географической
+    поправки на сближение меридианов — честная v1-оценка: в реальных файлах
+    экземпляры одного парка стоят близко друг к другу (одна или несколько
+    площадок в одном районе), а не на разных концах света."""
+    located = [(i.location_lat, i.location_lon) for i in instances if i.location_lat is not None and i.location_lon is not None]
+    if not located:
+        raise FleetLocationError(
+            "не удалось определить локацию парка: ни у одного экземпляра в файле "
+            "не указаны координаты (location_lat/location_lon)"
+        )
+    lat = sum(p[0] for p in located) / len(located)
+    lon = sum(p[1] for p in located) / len(located)
+    return lat, lon
+
+
+def create_fleet(*, name: str, location_name: str | None, raw: bytes) -> FleetSummary:
     records = _parse_records(raw)
 
     seen_numbers: set[str] = set()
@@ -74,7 +106,11 @@ def validate_and_store(raw: bytes) -> FleetSummary:
         model_key = str(rec.get("model") or "").strip()
         base_site = (rec.get("base_launch_site") or None) or None
         status = str(rec.get("status") or "Готов").strip()
-        location_lat, location_lon, location_problem = _parse_location(rec)
+        # Локация ЭКЗЕМПЛЯРА (может отличаться от локации парка в целом,
+        # см. FleetInstance.location_lat/lon) — специально не переиспользует
+        # имена location_lat/lon параметров функции, чтобы не затереть
+        # локацию самого парка на следующих итерациях цикла.
+        inst_lat, inst_lon, location_problem = _parse_location(rec)
 
         problems: list[str] = []
         if not inv:
@@ -100,8 +136,8 @@ def validate_and_store(raw: bytes) -> FleetSummary:
             model_key=model_key,
             model_name=model.name if model else model_key,
             base_launch_site=base_site,
-            location_lat=location_lat,
-            location_lon=location_lon,
+            location_lat=inst_lat,
+            location_lon=inst_lon,
             status=status if status in READINESS_STATUSES else "Готов",
             valid=valid,
             error="; ".join(problems) if problems else None,
@@ -110,9 +146,14 @@ def validate_and_store(raw: bytes) -> FleetSummary:
             errors.append(FleetIssue(inventory_number=inv or None, message=p))
 
     ready_count = sum(1 for i in instances if i.valid and i.status == "Готов")
+    location_lat, location_lon = _derive_fleet_location(instances)
 
     detail = FleetDetail(
         id=str(uuid.uuid4()),
+        name=name,
+        location_lat=location_lat,
+        location_lon=location_lon,
+        location_name=location_name,
         uploaded_at=datetime.now(timezone.utc),
         status="Содержит ошибки" if errors else "Корректна",
         total=len(instances),
@@ -121,19 +162,24 @@ def validate_and_store(raw: bytes) -> FleetSummary:
         instances=instances,
     )
 
-    global _fleet
-    _fleet = detail
+    _fleets[detail.id] = detail
     return _to_summary(detail)
 
 
-def get_fleet() -> FleetDetail:
-    if _fleet is None:
-        raise KeyError("парк БВС не загружен")
-    return _fleet
+def list_fleets() -> list[FleetSummary]:
+    return [_to_summary(f) for f in sorted(_fleets.values(), key=lambda f: f.uploaded_at, reverse=True)]
 
 
-def eligible_instances() -> list[FleetInstance]:
-    """ПБС.ФТ.4: экземпляры со статусом «Готов», допустимые как кандидаты на задачу."""
-    if _fleet is None:
+def get_fleet(fleet_id: str) -> FleetDetail:
+    return _fleets[fleet_id]  # KeyError -> 404 в routes
+
+
+def eligible_instances(fleet_id: str) -> list[FleetInstance]:
+    """ПБС.ФТ.4: экземпляры выбранного парка со статусом «Готов», допустимые
+    как кандидаты на задачу (задача теперь ссылается на конкретный парк —
+    ``TaskDetail.fleet_id`` — а не на единственный глобальный, см. модуль
+    «Задача»)."""
+    fleet = _fleets.get(fleet_id)
+    if fleet is None:
         return []
-    return [i for i in _fleet.instances if i.valid and i.status == "Готов"]
+    return [i for i in fleet.instances if i.valid and i.status == "Готов"]

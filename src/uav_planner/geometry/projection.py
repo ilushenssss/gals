@@ -9,11 +9,21 @@
 
 from __future__ import annotations
 
-from pyproj import CRS, Transformer
+from pyproj import CRS, Geod, Transformer
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
 
 WGS84 = CRS.from_epsg(4326)
+_GEOD = Geod(ellps="WGS84")
+
+
+def geodesic_distance_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    """Расстояние по эллипсоиду WGS-84 между двумя точками (метры) — для
+    сравнений на масштабе сотен-тысяч км (например, парк БВС и обстановка в
+    разных городах), где локальная UTM-проекция ``Projector`` уже не подходит
+    (действительна только вблизи своей зоны)."""
+    _, _, distance_m = _GEOD.inv(lon1, lat1, lon2, lat2)
+    return distance_m
 
 
 def utm_crs_for(lon: float, lat: float) -> CRS:

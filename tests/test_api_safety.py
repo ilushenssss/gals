@@ -20,18 +20,20 @@ from uav_planner.api import (
 def _clear_stores():
     environment_service._store.clear()
     task_service._tasks.clear()
-    fleet_service._fleet = None
+    fleet_service._fleets.clear()
     plan_service._plans.clear()
     plan_service._plan_ids_by_task.clear()
     safety_service._reports_by_plan.clear()
+    safety_service._reports_by_id.clear()
     safety_service._attempts_by_task_version.clear()
     yield
     environment_service._store.clear()
     task_service._tasks.clear()
-    fleet_service._fleet = None
+    fleet_service._fleets.clear()
     plan_service._plans.clear()
     plan_service._plan_ids_by_task.clear()
     safety_service._reports_by_plan.clear()
+    safety_service._reports_by_id.clear()
     safety_service._attempts_by_task_version.clear()
 
 
@@ -79,20 +81,36 @@ def _upload_environment(client, with_launch_site=True, no_fly=False):
     return resp.json()["id"]
 
 
-def _upload_fleet(client, n=1, model="geoscan-gemini", status="Готов"):
+def _upload_fleet(client, n=1, model="geoscan-gemini", status="Готов", location_lat=55.705, location_lon=37.56):
+    # Реальные (летающие) экземпляры намеренно БЕЗ собственной location_lat/lon
+    # — большинство тестов этого файла проверяют переход от ближайшей ВПП
+    # обстановки (в т.ч. обход/недостижимость через "стену" БПЗ), а не от
+    # локации экземпляра; так поведение не меняется по сравнению с тем, что
+    # тесты проверяли раньше. Локация парка (по запросу пользователя теперь
+    # определяется из файла, не вводится вручную) берётся с отдельного
+    # "якорного" экземпляра, который не летает (статус не "Готов") и на
+    # маршрутизацию не влияет.
     records = [
         {"inventory_number": f"{model}-{i}", "model": model, "status": status}
         for i in range(n)
+    ] + [
+        {"inventory_number": "anchor", "model": model, "status": "На обслуживании",
+         "location_lat": location_lat, "location_lon": location_lon},
     ]
     data = json.dumps(records).encode("utf-8")
-    resp = client.post("/api/fleet", files={"file": ("fleet.json", io.BytesIO(data), "application/json")})
-    assert resp.status_code == 200
+    resp = client.post(
+        "/api/fleets", data={"name": "Парк"},
+        files={"file": ("fleet.json", io.BytesIO(data), "application/json")},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["id"]
 
 
-def _create_task(client, env_id, **overrides):
+def _create_task(client, env_id, fleet_id, **overrides):
     form = {
         "name": "Задача 1",
         "environment_id": env_id,
+        "fleet_id": fleet_id,
         "survey_type": "RGB",
         "gsd_cm": "3.0",
         "work_date": "2026-06-15",
@@ -111,8 +129,8 @@ def _create_task(client, env_id, **overrides):
 
 def _make_plan(client, with_launch_site=True, no_fly=False, n_fleet=2):
     env_id = _upload_environment(client, with_launch_site=with_launch_site, no_fly=no_fly)
-    _upload_fleet(client, n=n_fleet)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client, n=n_fleet)
+    task_id = _create_task(client, env_id, fleet_id)
     plan = client.post("/api/plans", data={"task_id": task_id}).json()
     return plan["id"]
 
@@ -190,8 +208,8 @@ def test_astar_avoids_small_no_fly_zone_so_safety_check_passes(client):
     assert resp.status_code == 200, resp.text
     env_id = resp.json()["id"]
 
-    _upload_fleet(client, n=1)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client, n=1)
+    task_id = _create_task(client, env_id, fleet_id)
     plan = client.post("/api/plans", data={"task_id": task_id}).json()
     detail = client.get(f"/api/plans/{plan['id']}").json()
     assert detail["warnings"] == []
@@ -255,3 +273,90 @@ def test_safety_check_reachability_fails_without_landing_site(client):
     body = resp.json()
     reachability = next(c for c in body["checks"] if c["name"] == "reachability")
     assert reachability["passed"] is False
+
+
+def _first_violation(report):
+    for c in report["checks"]:
+        for v in c["violations"]:
+            if not v["message"].startswith("..."):
+                return v
+    raise AssertionError("report has no violations")
+
+
+def test_violations_each_get_a_stable_id(client):
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    v = _first_violation(report)
+    assert v["id"]
+    assert v["ignored"] is False
+    assert report["violations_acknowledged"] is False
+
+
+def test_ignoring_one_of_several_violations_does_not_acknowledge_the_report(client):
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    all_violation_ids = [
+        v["id"] for c in report["checks"] for v in c["violations"] if not v["message"].startswith("...")
+    ]
+    assert len(all_violation_ids) >= 1
+
+    updated = client.post(
+        f"/api/safety-checks/{report['id']}/violations/{all_violation_ids[0]}/ignore",
+        data={"ignored": "true"},
+    ).json()
+    if len(all_violation_ids) > 1:
+        assert updated["violations_acknowledged"] is False
+    else:
+        assert updated["violations_acknowledged"] is True
+
+
+def test_ignoring_all_violations_acknowledges_the_report(client):
+    # Включая сводную строку "...и еще N нарушени(й)", если она есть — это тоже
+    # отдельная запись violations с собственным id, ее тоже нужно принять явно.
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    all_violation_ids = [v["id"] for c in report["checks"] for v in c["violations"]]
+
+    updated = report
+    for vid in all_violation_ids:
+        resp = client.post(
+            f"/api/safety-checks/{report['id']}/violations/{vid}/ignore", data={"ignored": "true"},
+        )
+        assert resp.status_code == 200, resp.text
+        updated = resp.json()
+
+    assert updated["violations_acknowledged"] is True
+    for c in updated["checks"]:
+        for v in c["violations"]:
+            assert v["ignored"] is True
+
+    # Снятие галочки с одного нарушения снова блокирует подтверждение отчета.
+    unignored = client.post(
+        f"/api/safety-checks/{report['id']}/violations/{all_violation_ids[0]}/ignore",
+        data={"ignored": "false"},
+    ).json()
+    assert unignored["violations_acknowledged"] is False
+
+    # Возвращаем как было, чтобы get_latest_report тоже отражал финальное состояние.
+    client.post(
+        f"/api/safety-checks/{report['id']}/violations/{all_violation_ids[0]}/ignore",
+        data={"ignored": "true"},
+    )
+    fetched = client.get("/api/safety-checks/latest", params={"plan_id": report["plan_id"]}).json()
+    assert fetched["violations_acknowledged"] is True
+
+
+def test_ignoring_unknown_violation_returns_404(client):
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    resp = client.post(
+        f"/api/safety-checks/{report['id']}/violations/does-not-exist/ignore", data={"ignored": "true"},
+    )
+    assert resp.status_code == 404
+
+
+def test_ignoring_violation_of_unknown_report_returns_404(client):
+    resp = client.post(
+        "/api/safety-checks/does-not-exist/violations/geozones__0/ignore", data={"ignored": "true"},
+    )
+    assert resp.status_code == 404

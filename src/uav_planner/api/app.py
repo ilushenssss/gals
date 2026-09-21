@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from .export_routes import router as export_router
 from .fleet_routes import router as fleet_router
 from .plan_routes import router as plans_router
 from .routes import router as environments_router
@@ -25,4 +26,5 @@ app.include_router(tasks_router)
 app.include_router(fleet_router)
 app.include_router(plans_router)
 app.include_router(safety_router)
+app.include_router(export_router)
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")

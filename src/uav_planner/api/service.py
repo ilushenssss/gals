@@ -189,3 +189,21 @@ def list_environments() -> list[EnvironmentSummary]:
 
 def get_environment(environment_id: str) -> EnvironmentDetail:
     return _store[environment_id]
+
+
+def environment_location(env: EnvironmentDetail) -> tuple[float, float] | None:
+    """Представительная точка обстановки (WGS-84, ``(lat, lon)``) — центроид
+    объединения валидных зон разрешенного пространства (``airspace``).
+    Используется модулем «Задача» для проверки совместимости с парком по
+    расстоянию (``task_service._check_fleet_environment_compatibility``);
+    ``None``, если у обстановки нет ни одной валидной зоны ``airspace`` —
+    тогда проверка расстояния просто не выполняется, а не падает."""
+    geoms = [
+        shape(f["geometry"])
+        for f in env.layers.get("airspace", [])
+        if f.get("properties", {}).get("_valid", True)
+    ]
+    if not geoms:
+        return None
+    centroid = unary_union(geoms).centroid
+    return centroid.y, centroid.x

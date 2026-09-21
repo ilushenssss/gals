@@ -12,9 +12,10 @@ from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from uav_planner.geometry import GeometryError, Projector, validate_polygon
+from uav_planner.geometry import GeometryError, Projector, geodesic_distance_m, validate_polygon
 from uav_planner.schedule import daylight_window_utc_hours
 
+from . import fleet_service
 from . import service as environment_service
 from .task_models import SURVEY_TYPES, TaskDetail, TaskSummary, TaskValidationIssue
 
@@ -22,8 +23,15 @@ _tasks: dict[str, TaskDetail] = {}
 
 _SUMMARY_ONLY_EXCLUDE = {
     "gsd_cm", "window_start", "window_end", "wind_speed_ms",
-    "cloud_cover_pct", "criterion_mode", "criterion_alpha", "area",
+    "cloud_cover_pct", "criterion_mode", "criterion_alpha",
 }
+
+# Порог совместимости парка и обстановки по расстоянию (по запросу пользователя,
+# ЗАД: «не выбрали парк из Екатеринбурга, а обстановку из Москвы»). 150 км —
+# заведомо больше типичного вылета БВС, но не блокирует парк и обстановку в
+# пределах одного города/области; Екатеринбург-Москва (~1400 км) далеко за
+# порогом. Настраиваемая v1-константа, не значение из ТЗ.
+MAX_FLEET_ENVIRONMENT_DISTANCE_KM = 150.0
 
 
 class TaskValidationError(ValueError):
@@ -65,9 +73,35 @@ def _daylight_warning(area_geom: BaseGeometry, work_date: date, window_start: ti
     return None
 
 
+def _check_fleet_environment_compatibility(fleet, env) -> TaskValidationIssue | None:
+    """По запросу пользователя: парк и обстановка должны быть достаточно
+    близко географически (иначе БВС физически не долетят до области работ) —
+    не дает, например, выбрать парк из Екатеринбурга с обстановкой из Москвы.
+    Сравнение — по геодезическому расстоянию (``geometry.geodesic_distance_m``,
+    эллипсоид WGS-84, годится на масштаб городов/областей — локальная UTM-
+    проекция ``Projector`` для этого не подходит). Если у обстановки нет ни
+    одной валидной зоны ``airspace`` — сравнивать не с чем, проверка
+    пропускается (это уже отдельная ошибка поля ``area``/обстановки, не эта)."""
+    env_location = environment_service.environment_location(env)
+    if env_location is None:
+        return None
+    distance_km = geodesic_distance_m(fleet.location_lon, fleet.location_lat, env_location[1], env_location[0]) / 1000.0
+    if distance_km > MAX_FLEET_ENVIRONMENT_DISTANCE_KM:
+        return TaskValidationIssue(
+            field="fleet_id",
+            message=(
+                f"парк «{fleet.name}» слишком далеко от обстановки «{env.name}» "
+                f"({distance_km:.0f} км, допустимо не более {MAX_FLEET_ENVIRONMENT_DISTANCE_KM:.0f} км) — "
+                "выберите парк, базирующийся ближе к области работ"
+            ),
+        )
+    return None
+
+
 def _validate(
     *,
     environment_id: str,
+    fleet_id: str,
     survey_type: str,
     gsd_cm: float,
     work_date: date,
@@ -76,8 +110,8 @@ def _validate(
     criterion_mode: str,
     criterion_alpha: float | None,
     area_geojson: dict[str, Any],
-) -> tuple[Any, float | None, BaseGeometry | None]:
-    """Проверки ЗАД.ФТ.2-5. Возвращает (обстановка, alpha, area_geom) или бросает TaskValidationError."""
+) -> tuple[Any, Any, float | None, BaseGeometry | None]:
+    """Проверки ЗАД.ФТ.2-5. Возвращает (обстановка, парк, alpha, area_geom) или бросает TaskValidationError."""
     issues: list[TaskValidationIssue] = []
 
     try:
@@ -88,6 +122,17 @@ def _validate(
         raise TaskValidationError([
             TaskValidationIssue(field="environment_id", message="обстановка содержит ошибки и недоступна для постановки задачи")
         ])
+
+    try:
+        fleet = fleet_service.get_fleet(fleet_id)
+    except KeyError:
+        raise TaskValidationError([TaskValidationIssue(field="fleet_id", message="парк не найден")])
+    if fleet.status != "Корректна":
+        issues.append(TaskValidationIssue(field="fleet_id", message="парк содержит ошибки и недоступен для постановки задачи"))
+    else:
+        compat_issue = _check_fleet_environment_compatibility(fleet, env)
+        if compat_issue:
+            issues.append(compat_issue)
 
     if survey_type not in SURVEY_TYPES:
         issues.append(TaskValidationIssue(field="survey_type", message=f"недопустимый тип съемки: {survey_type!r}"))
@@ -139,13 +184,14 @@ def _validate(
     if issues:
         raise TaskValidationError(issues)
 
-    return env, alpha, area_geom
+    return env, fleet, alpha, area_geom
 
 
 def create_task(
     *,
     name: str,
     environment_id: str,
+    fleet_id: str,
     survey_type: str,
     gsd_cm: float,
     work_date: date,
@@ -157,9 +203,9 @@ def create_task(
     criterion_alpha: float | None,
     area_geojson: dict[str, Any],
 ) -> TaskSummary:
-    env, alpha, area_geom = _validate(
-        environment_id=environment_id, survey_type=survey_type, gsd_cm=gsd_cm, work_date=work_date,
-        window_start=window_start, window_end=window_end, criterion_mode=criterion_mode,
+    env, fleet, alpha, area_geom = _validate(
+        environment_id=environment_id, fleet_id=fleet_id, survey_type=survey_type, gsd_cm=gsd_cm,
+        work_date=work_date, window_start=window_start, window_end=window_end, criterion_mode=criterion_mode,
         criterion_alpha=criterion_alpha, area_geojson=area_geojson,
     )
     warning = _daylight_warning(area_geom, work_date, window_start, window_end)
@@ -168,6 +214,7 @@ def create_task(
     now = datetime.now(timezone.utc)
     detail = TaskDetail(
         id=task_id, name=name, environment_id=environment_id, environment_name=env.name,
+        fleet_id=fleet_id, fleet_name=fleet.name,
         survey_type=survey_type, work_date=work_date, status="Черновик", version=1,
         daylight_warning=warning, created_at=now, updated_at=now, gsd_cm=gsd_cm,
         window_start=window_start, window_end=window_end, wind_speed_ms=wind_speed_ms,
@@ -202,9 +249,9 @@ def update_task(
     if existing.version != expected_version:
         raise TaskConflictError(f"задача изменена другим пользователем (текущая версия {existing.version})")
 
-    env, alpha, area_geom = _validate(
-        environment_id=existing.environment_id, survey_type=survey_type, gsd_cm=gsd_cm, work_date=work_date,
-        window_start=window_start, window_end=window_end, criterion_mode=criterion_mode,
+    env, fleet, alpha, area_geom = _validate(
+        environment_id=existing.environment_id, fleet_id=existing.fleet_id, survey_type=survey_type, gsd_cm=gsd_cm,
+        work_date=work_date, window_start=window_start, window_end=window_end, criterion_mode=criterion_mode,
         criterion_alpha=criterion_alpha, area_geojson=area_geojson,
     )
     warning = _daylight_warning(area_geom, work_date, window_start, window_end)
@@ -228,6 +275,19 @@ def mark_calculated(task_id: str) -> None:
     """Вызывается модулем «Планирование» после успешного расчета плана (ПЛН.ФТ.5)."""
     existing = _tasks[task_id]
     _tasks[task_id] = existing.model_copy(update={"status": "Рассчитана", "updated_at": datetime.now(timezone.utc)})
+
+
+def mark_confirmed(task_id: str) -> None:
+    """Вызывается модулем «Подтверждение и экспорт» после подтверждения плана
+    (ЭКС.ФТ.6) — блокирует редактирование параметров задачи через
+    ``update_task`` (см. ``TaskNotEditableError`` выше), пока задача в этом
+    статусе. Новый расчет плана по той же задаче (``mark_calculated``) снова
+    переводит ее в «Рассчитана» и тем самым разблокирует редактирование —
+    подтверждение относится к конкретной версии плана, а не запрещает
+    расчет новых версий (ЭКС.ФТ.3: «получение другого результата требует
+    нового расчета» — это явно разрешенный путь)."""
+    existing = _tasks[task_id]
+    _tasks[task_id] = existing.model_copy(update={"status": "Подтверждена", "updated_at": datetime.now(timezone.utc)})
 
 
 def list_tasks(environment_id: str | None = None) -> list[TaskSummary]:

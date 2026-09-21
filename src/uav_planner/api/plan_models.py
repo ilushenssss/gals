@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
+
+# ЭКС.ФТ.5: жизненный цикл плана. «Проверен» здесь означает исключительно
+# «последняя проверка безопасности пройдена без нарушений» — версия плана,
+# провалившая проверку, откатывается обратно в «Черновик» (см.
+# plan_service.mark_reviewed): статус «Проверен с нарушениями» из требования
+# отображается отдельно, в самом модуле «Проверка безопасности»
+# (SafetyReport.status), и намеренно не хранится как отдельное значение
+# здесь — им бы никто не пользовался в этом модуле, кроме как для запрета
+# подтверждения, а этот запрет и так следует из того, что статус не «Проверен».
+PlanStatus = Literal["Черновик", "Проверен", "Подтвержден", "Выгружен"]
 
 
 class PlanSortiePhase(BaseModel):
@@ -47,6 +57,19 @@ class PlanSummary(BaseModel):
     uav_model: str
     sortie_count: int
     warnings: list[str] = []
+    status: PlanStatus = "Черновик"
+    # ЭКС.ФТ.6/9: фиксация подтверждения. confirmed_by — свободный текст «ФИО»,
+    # введенный оператором в форме подтверждения (в системе нет модели
+    # пользователей/аутентификации — см. main/README.md, раздел «Подтверждение
+    # и экспорт» — это честно задокументированное упрощение v1, а не
+    # полноценная идентификация).
+    confirmed_at: Optional[datetime] = None
+    confirmed_by: Optional[str] = None
+    exported_at: Optional[datetime] = None  # ЭКС.ФТ.7: время первого успешного экспорта
+    # true, если план подтвержден в обход обычного запрета на нарушения (ЭКС.ФТ.2) —
+    # оператор явно отметил каждое нарушение последнего отчета как принятое, см.
+    # safety_service.set_violation_ignored/SafetyReport.violations_acknowledged.
+    confirmed_with_overrides: bool = False
 
 
 class PlanDetail(PlanSummary):

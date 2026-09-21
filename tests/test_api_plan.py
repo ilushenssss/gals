@@ -15,13 +15,13 @@ from uav_planner.api import fleet_service, plan_service, service as environment_
 def _clear_stores():
     environment_service._store.clear()
     task_service._tasks.clear()
-    fleet_service._fleet = None
+    fleet_service._fleets.clear()
     plan_service._plans.clear()
     plan_service._plan_ids_by_task.clear()
     yield
     environment_service._store.clear()
     task_service._tasks.clear()
-    fleet_service._fleet = None
+    fleet_service._fleets.clear()
     plan_service._plans.clear()
     plan_service._plan_ids_by_task.clear()
 
@@ -60,20 +60,28 @@ def _upload_environment(client, with_launch_site=True):
     return resp.json()["id"]
 
 
-def _upload_fleet(client, n=1, model="geoscan-gemini", status="Готов"):
+def _upload_fleet(client, n=1, model="geoscan-gemini", status="Готов", location_lat=55.705, location_lon=37.6):
+    # Локация парка определяется из файла (по запросу пользователя), не
+    # вводится вручную — задаём её через location_lat/lon каждого экземпляра.
     records = [
-        {"inventory_number": f"{model}-{i}", "model": model, "status": status}
+        {"inventory_number": f"{model}-{i}", "model": model, "status": status,
+         "location_lat": location_lat, "location_lon": location_lon}
         for i in range(n)
     ]
     data = json.dumps(records).encode("utf-8")
-    resp = client.post("/api/fleet", files={"file": ("fleet.json", io.BytesIO(data), "application/json")})
-    assert resp.status_code == 200
+    resp = client.post(
+        "/api/fleets", data={"name": "Парк"},
+        files={"file": ("fleet.json", io.BytesIO(data), "application/json")},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["id"]
 
 
-def _create_task(client, env_id, **overrides):
+def _create_task(client, env_id, fleet_id, **overrides):
     form = {
         "name": "Задача 1",
         "environment_id": env_id,
+        "fleet_id": fleet_id,
         "survey_type": "RGB",
         "gsd_cm": "3.0",
         "work_date": "2026-06-15",
@@ -92,8 +100,8 @@ def _create_task(client, env_id, **overrides):
 
 def test_create_plan_happy_path(client):
     env_id = _upload_environment(client)
-    _upload_fleet(client, n=2)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client, n=2)
+    task_id = _create_task(client, env_id, fleet_id)
 
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 200, resp.text
@@ -109,8 +117,8 @@ def test_create_plan_happy_path(client):
 
 def test_create_plan_marks_task_calculated(client):
     env_id = _upload_environment(client)
-    _upload_fleet(client)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client)
+    task_id = _create_task(client, env_id, fleet_id)
 
     client.post("/api/plans", data={"task_id": task_id})
     task = client.get(f"/api/tasks/{task_id}").json()
@@ -119,8 +127,8 @@ def test_create_plan_marks_task_calculated(client):
 
 def test_get_plan_returns_sorties_with_route_geometry(client):
     env_id = _upload_environment(client)
-    _upload_fleet(client, n=2)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client, n=2)
+    task_id = _create_task(client, env_id, fleet_id)
     summary = client.post("/api/plans", data={"task_id": task_id}).json()
 
     detail = client.get(f"/api/plans/{summary['id']}").json()
@@ -133,8 +141,8 @@ def test_get_plan_returns_sorties_with_route_geometry(client):
 
 def test_sortie_phases_cover_the_whole_flight_with_no_gaps(client):
     env_id = _upload_environment(client)
-    _upload_fleet(client, n=1)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client, n=1)
+    task_id = _create_task(client, env_id, fleet_id)
     plan_id = client.post("/api/plans", data={"task_id": task_id}).json()["id"]
     detail = client.get(f"/api/plans/{plan_id}").json()
 
@@ -154,8 +162,8 @@ def test_sortie_phases_cover_the_whole_flight_with_no_gaps(client):
 
 def test_second_calculation_creates_new_version(client):
     env_id = _upload_environment(client)
-    _upload_fleet(client)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client)
+    task_id = _create_task(client, env_id, fleet_id)
 
     first = client.post("/api/plans", data={"task_id": task_id}).json()
     second = client.post("/api/plans", data={"task_id": task_id}).json()
@@ -165,18 +173,22 @@ def test_second_calculation_creates_new_version(client):
     assert [v["version"] for v in versions] == [2, 1]
 
 
-def test_plan_without_fleet_is_infeasible(client):
+def test_plan_with_no_ready_instances_is_infeasible(client):
+    # Парк существует (задачу с ним создать можно — совместимость по
+    # расстоянию не про готовность экземпляров), но ни один экземпляр не в
+    # статусе «Готов» -> расчет плана невыполним именно на этом основании.
     env_id = _upload_environment(client)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client, status="На обслуживании")
+    task_id = _create_task(client, env_id, fleet_id)
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 422
-    assert "парк" in resp.json()["detail"]
+    assert "Готов" in resp.json()["detail"]
 
 
 def test_plan_with_incompatible_survey_type_is_infeasible(client):
     env_id = _upload_environment(client)
-    _upload_fleet(client, model="geoscan-801")  # тепловизор/RGB 12Мп, не мультиспектральный
-    task_id = _create_task(client, env_id, survey_type="мультиспектральная")
+    fleet_id = _upload_fleet(client, model="geoscan-801")  # тепловизор/RGB 12Мп, не мультиспектральный
+    task_id = _create_task(client, env_id, fleet_id, survey_type="мультиспектральная")
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 422
     assert "нагрузк" in resp.json()["detail"]
@@ -184,8 +196,8 @@ def test_plan_with_incompatible_survey_type_is_infeasible(client):
 
 def test_plan_with_lidar_survey_type_is_infeasible(client):
     env_id = _upload_environment(client)
-    _upload_fleet(client)
-    task_id = _create_task(client, env_id, survey_type="LiDAR")
+    fleet_id = _upload_fleet(client)
+    task_id = _create_task(client, env_id, fleet_id, survey_type="LiDAR")
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 422
     assert "LiDAR" in resp.json()["detail"] or "не поддерживается" in resp.json()["detail"]
@@ -193,8 +205,8 @@ def test_plan_with_lidar_survey_type_is_infeasible(client):
 
 def test_plan_without_launch_site_uses_area_centroid(client):
     env_id = _upload_environment(client, with_launch_site=False)
-    _upload_fleet(client)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client)
+    task_id = _create_task(client, env_id, fleet_id)
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 200
     detail = client.get(f"/api/plans/{resp.json()['id']}").json()
@@ -240,8 +252,8 @@ def test_transit_route_avoids_no_fly_zone_via_astar(client):
         files={"file": ("scene.geojson", io.BytesIO(json.dumps(scene).encode("utf-8")), "application/json")},
     )
     env_id = resp.json()["id"]
-    _upload_fleet(client, n=1)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client, n=1)
+    task_id = _create_task(client, env_id, fleet_id)
 
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 200, resp.text
@@ -262,15 +274,18 @@ def test_smaller_but_faster_model_group_wins_by_criterion(client):
     # теперь побеждает та, что реально минимизирует критерий задачи (J1 при
     # "Время") — а один быстрый самолет отработает задачу заметно быстрее.
     env_id = _upload_environment(client)
-    records = [{"inventory_number": "201-1", "model": "geoscan-201", "status": "Готов"}] + [
-        {"inventory_number": f"GEM-{i}", "model": "geoscan-gemini", "status": "Готов"} for i in range(3)
+    records = [{"inventory_number": "201-1", "model": "geoscan-201", "status": "Готов",
+                "location_lat": 55.705, "location_lon": 37.6}] + [
+        {"inventory_number": f"GEM-{i}", "model": "geoscan-gemini", "status": "Готов",
+         "location_lat": 55.705, "location_lon": 37.6} for i in range(3)
     ]
     resp = client.post(
-        "/api/fleet",
+        "/api/fleets", data={"name": "Парк"},
         files={"file": ("fleet.json", io.BytesIO(json.dumps(records).encode("utf-8")), "application/json")},
     )
-    assert resp.status_code == 200
-    task_id = _create_task(client, env_id, criterion_mode="Время")
+    assert resp.status_code == 200, resp.text
+    fleet_id = resp.json()["id"]
+    task_id = _create_task(client, env_id, fleet_id, criterion_mode="Время")
 
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 200, resp.text
@@ -305,8 +320,22 @@ def test_launch_site_chosen_by_nearest_not_first(client):
         files={"file": ("scene.geojson", io.BytesIO(json.dumps(scene).encode("utf-8")), "application/json")},
     )
     env_id = resp.json()["id"]
-    _upload_fleet(client, n=1)
-    task_id = _create_task(client, env_id)
+    # Экземпляр без собственной локации — тестируем именно fallback на
+    # ближайшую ВПП. Второй, нелетающий экземпляр с локацией нужен только
+    # чтобы у парка вообще была определяемая по файлу локация (по запросу
+    # пользователя) — на выбор площадки первым он не влияет (не "Готов").
+    records = [
+        {"inventory_number": "GEM-1", "model": "geoscan-gemini", "status": "Готов"},
+        {"inventory_number": "GEM-anchor", "model": "geoscan-gemini", "status": "На обслуживании",
+         "location_lat": 55.705, "location_lon": 37.6},
+    ]
+    resp = client.post(
+        "/api/fleets", data={"name": "Парк"},
+        files={"file": ("fleet.json", io.BytesIO(json.dumps(records).encode("utf-8")), "application/json")},
+    )
+    assert resp.status_code == 200, resp.text
+    fleet_id = resp.json()["id"]
+    task_id = _create_task(client, env_id, fleet_id)
 
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 200, resp.text
@@ -341,11 +370,13 @@ def test_instance_own_location_overrides_nearest_site(client):
         "base_launch_site": "Своя площадка", "location_lat": 55.75, "location_lon": 37.60,
     }]
     resp = client.post(
-        "/api/fleet",
+        "/api/fleets",
+        data={"name": "Парк", "location_lat": "55.75", "location_lon": "37.60"},
         files={"file": ("fleet.json", io.BytesIO(json.dumps(records).encode("utf-8")), "application/json")},
     )
-    assert resp.status_code == 200
-    task_id = _create_task(client, env_id)
+    assert resp.status_code == 200, resp.text
+    fleet_id = resp.json()["id"]
+    task_id = _create_task(client, env_id, fleet_id)
 
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 200, resp.text
@@ -376,14 +407,16 @@ def test_work_splits_across_two_vehicles_at_opposite_ends_of_the_area(client):
          "location_lat": 55.705, "location_lon": 37.578},
     ]
     resp = client.post(
-        "/api/fleet",
+        "/api/fleets",
+        data={"name": "Парк", "location_lat": "55.705", "location_lon": "37.565"},
         files={"file": ("fleet.json", io.BytesIO(json.dumps(records).encode("utf-8")), "application/json")},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
+    fleet_id = resp.json()["id"]
 
     area = {"type": "Polygon", "coordinates": square_coords(37.552, 55.702, 0.026, 0.004)}
     form = {
-        "name": "Задача с двумя площадками", "environment_id": env_id, "survey_type": "RGB",
+        "name": "Задача с двумя площадками", "environment_id": env_id, "fleet_id": fleet_id, "survey_type": "RGB",
         "gsd_cm": "3.0", "work_date": "2026-06-15", "criterion_mode": "Время",
     }
     resp = client.post(
@@ -412,10 +445,10 @@ def test_higher_wind_speed_increases_total_flight_time(client):
     # Крейсерская скорость = максимум модели минус скорость ветра (см. известные
     # ограничения) -> при том же покрытии больший ветер должен увеличивать J2.
     env_id = _upload_environment(client)
-    _upload_fleet(client, n=2)
+    fleet_id = _upload_fleet(client, n=2)
 
-    task_calm = _create_task(client, env_id, name="Без ветра", wind_speed_ms="0")
-    task_windy = _create_task(client, env_id, name="С ветром", wind_speed_ms="5")
+    task_calm = _create_task(client, env_id, fleet_id, name="Без ветра", wind_speed_ms="0")
+    task_windy = _create_task(client, env_id, fleet_id, name="С ветром", wind_speed_ms="5")
 
     plan_calm = client.post("/api/plans", data={"task_id": task_calm}).json()
     plan_windy = client.post("/api/plans", data={"task_id": task_windy}).json()

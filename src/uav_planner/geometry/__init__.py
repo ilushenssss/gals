@@ -1,5 +1,5 @@
 from .errors import GeometryError
-from .projection import Projector, utm_crs_for
+from .projection import Projector, geodesic_distance_m, utm_crs_for
 from .area import (
     HeightRange,
     TimeWindow,
@@ -14,6 +14,7 @@ from .area import (
 __all__ = [
     "GeometryError",
     "Projector",
+    "geodesic_distance_m",
     "utm_crs_for",
     "HeightRange",
     "TimeWindow",

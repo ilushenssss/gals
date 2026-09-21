@@ -102,6 +102,30 @@ class PlanInfeasibleError(ValueError):
     """Задачу невозможно рассчитать в текущем виде (ПЛН.ФТ.10)."""
 
 
+class PlanNotReviewedError(ValueError):
+    """ЭКС.ФТ.2: подтвердить можно только план в статусе «Проверен» (последняя
+    проверка безопасности пройдена без нарушений)."""
+
+
+class PlanAlreadyConfirmedError(ValueError):
+    """ЭКС.ФТ.9: план уже подтвержден (в этом же запросе или ранее) — второй
+    запрос на подтверждение не проходит, вместо этого пользователь видит, кем
+    план уже подтвержден."""
+
+    def __init__(self, confirmed_by: str | None):
+        message = (
+            f"план уже подтвержден пользователем «{confirmed_by}»" if confirmed_by
+            else "план уже подтвержден"
+        )
+        super().__init__(message)
+        self.confirmed_by = confirmed_by
+
+
+class PlanNotConfirmedError(ValueError):
+    """ЭКС.ФТ.7: экспорт доступен только для подтвержденного (или уже
+    выгруженного) плана."""
+
+
 def _to_summary(detail: PlanDetail) -> PlanSummary:
     return PlanSummary(**detail.model_dump(exclude=_SUMMARY_ONLY_EXCLUDE))
 
@@ -282,9 +306,12 @@ def create_plan(task_id: str) -> PlanSummary:
         raise PlanInfeasibleError("обстановка задачи содержит ошибки и недоступна для расчета")
 
     spectrum = _survey_type_spectrum(task.survey_type)
-    eligible = fleet_service.eligible_instances()
+    # Парк выбирается оператором при постановке задачи (ЗАД, чек-боксы «Парк» +
+    # «Обстановка», совместимость по расстоянию уже проверена в task_service) —
+    # кандидаты только из него, не из всех загруженных парков сразу.
+    eligible = fleet_service.eligible_instances(task.fleet_id)
     if not eligible:
-        raise PlanInfeasibleError("нет загруженного парка БВС в статусе «Готов»")
+        raise PlanInfeasibleError(f"в парке «{task.fleet_name}» нет ни одного экземпляра БВС в статусе «Готов»")
 
     groups = _group_by_model_camera(eligible, spectrum)
     if not groups:
@@ -547,3 +574,72 @@ def list_plans(task_id: str) -> list[PlanSummary]:
 
 def get_plan(plan_id: str) -> PlanDetail:
     return _plans[plan_id]
+
+
+def mark_reviewed(plan_id: str, passed: bool) -> None:
+    """Вызывается модулем «Проверка безопасности» (``safety_service._store_report``)
+    после каждой проверки — ведет статус плана для ЭКС.ФТ.5: «Проверен»
+    означает исключительно «последняя проверка пройдена без нарушений»;
+    проверка с нарушениями откатывает план обратно в «Черновик» (отдельный
+    статус «Проверен с нарушениями» показывает сам модуль «Проверка
+    безопасности», см. docstring ``PlanStatus``). Подтвержденный/выгруженный
+    план проверка не понижает — записанный результат проверки об этом не
+    свидетельствует о содержимом уже подтвержденного плана (оно неизменно,
+    ЭКС.ФТ.3), это просто отдельный побочный вызов проверки поверх него."""
+    plan = _plans.get(plan_id)
+    if plan is None or plan.status in ("Подтвержден", "Выгружен"):
+        return
+    new_status: str = "Проверен" if passed else "Черновик"
+    if plan.status != new_status:
+        _plans[plan_id] = plan.model_copy(update={"status": new_status})
+
+
+def confirm_plan(plan_id: str, confirmed_by: str, *, override_violations: bool = False) -> PlanDetail:
+    """ЭКС.ФТ.2, ЭКС.ФТ.6, ЭКС.ФТ.9: подтверждение плана оператором.
+
+    v1-упрощение (задокументировано также в ``PlanDetail.confirmed_by``): в
+    системе нет модели пользователей — «первым завершил действие» проверяется
+    условным переходом статуса (``plan.status == "Проверен"`` -> «Подтвержден»
+    в одном синхронном вызове), а не блокировкой по версии, как в
+    ``task_service.TaskConflictError``, потому что подтверждение не меняет
+    содержимое плана и его не с чем сравнивать по версии — важен только
+    результат гонки: кто первый, тот и подтвердил.
+
+    ``override_violations`` — расширение поверх ЭКС.ФТ.2 по запросу
+    пользователя: разрешает подтвердить план в статусе «Черновик» (проверка
+    нашла нарушения), если оператор явно отметил принятыми ВСЕ нарушения
+    последнего отчета проверки безопасности. Сама проверка «действительно ли
+    все отмечены» — обязанность вызывающей стороны (``export_routes``, у нее
+    есть доступ к ``safety_service``; ``plan_service`` в него не ходит, чтобы
+    не создавать цикл импорта, так как ``safety_service`` сам импортирует
+    ``plan_service``) — этот флаг здесь уже доверенный, не проверяется заново."""
+    plan = _plans[plan_id]  # KeyError -> 404 в routes
+    if plan.status in ("Подтвержден", "Выгружен"):
+        raise PlanAlreadyConfirmedError(plan.confirmed_by)
+    if plan.status != "Проверен" and not (override_violations and plan.status == "Черновик"):
+        raise PlanNotReviewedError(
+            "план можно подтвердить только после проверки безопасности без нарушений "
+            "(или отметив принятыми все найденные нарушения)"
+        )
+    updated = plan.model_copy(update={
+        "status": "Подтвержден",
+        "confirmed_at": datetime.now(timezone.utc),
+        "confirmed_by": confirmed_by,
+        "confirmed_with_overrides": override_violations,
+    })
+    _plans[plan_id] = updated
+    task_service.mark_confirmed(plan.task_id)
+    return updated
+
+
+def mark_exported(plan_id: str) -> PlanDetail:
+    """ЭКС.ФТ.7: первая успешная выгрузка (KML/GeoJSON/архив) переводит план
+    в статус «Выгружен» — повторные выгрузки статус не меняют (идемпотентно)."""
+    plan = _plans[plan_id]
+    if plan.status not in ("Подтвержден", "Выгружен"):
+        raise PlanNotConfirmedError("экспорт доступен только для подтвержденного плана")
+    if plan.status == "Выгружен":
+        return plan
+    updated = plan.model_copy(update={"status": "Выгружен", "exported_at": datetime.now(timezone.utc)})
+    _plans[plan_id] = updated
+    return updated

@@ -35,13 +35,14 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 
 #app{display:flex;flex-direction:column;height:100%}
 
-/* ---- шапка: логотип + ИНТ.ФТ.2 индикатор этапа (парк БВС — см. #fleet-panel, постоянная левая панель) ---- */
+/* ---- шапка: логотип + степпер (для этапов внутри уже открытой задачи) + кнопка возврата в каталог ---- */
 #stepper-bar{display:flex;align-items:center;gap:12px;padding:0 16px;height:46px;flex:none;background:var(--panel);border-bottom:1px solid var(--rule)}
 #brand{display:flex;align-items:center;gap:8px;flex:none}
 #brand .logo-chip{width:30px;height:30px;flex:none;border-radius:8px;background:var(--brand-chip);display:flex;align-items:center;justify-content:center}
 #brand .logo-chip img{width:20px;height:20px;display:block}
 #brand .brand-name{font-weight:700;font-size:15px;letter-spacing:.01em;color:var(--ink);white-space:nowrap}
 #stepper{display:flex;align-items:center;gap:0;flex:1;min-width:0;overflow-x:auto}
+#btn-home{flex:none;padding:6px 14px;font-size:12.5px}
 .step{display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;color:var(--muted);font-size:13px;font-weight:600;white-space:nowrap;cursor:default}
 .step .dot{width:18px;height:18px;border-radius:50%;border:2px solid var(--rule);display:grid;place-items:center;font-size:11px;color:var(--muted);flex:none}
 .step.active{color:var(--ink)}
@@ -52,18 +53,10 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 
 /* ---- основная раскладка ---- */
 #main{flex:1;display:flex;min-height:0}
-/* ---- ПБС: парк БВС — постоянная левая панель, видна на любом экране ---- */
-#fleet-panel{width:280px;flex:none;background:var(--panel);border-right:1px solid var(--rule);overflow-y:auto;padding:16px}
 #map-area{flex:1;position:relative;min-height:0}
 #map{width:100%;height:100%}
-#sidebar{width:360px;flex:none;background:var(--panel);border-left:1px solid var(--rule);overflow-y:auto;padding:16px}
+#sidebar{width:360px;flex:none;background:var(--panel);border-right:1px solid var(--rule);overflow-y:auto;padding:16px}
 #sidebar[hidden]{display:none}
-
-/* ---- ИНТ.ФТ.3: экран запуска ---- */
-#launch-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:transparent;pointer-events:none;z-index:500}
-#launch-overlay button{pointer-events:auto}
-#btn-load{background:var(--ink);color:var(--paper);border:none;border-radius:10px;padding:14px 28px;font-size:16px;font-weight:600;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,.18)}
-#btn-load:hover{opacity:.9}
 
 /* ---- модальное окно загрузки (ОБС.ФТ.8) ---- */
 .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:1000}
@@ -158,6 +151,41 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 .task-list .t-meta{font-size:12px;color:var(--muted)}
 .loc-dot{font-size:9px;color:var(--area);vertical-align:middle}
 .status-badge.draft{background:var(--panel);color:var(--muted);border:1px solid var(--rule)}
+.status-badge.reviewed{background:rgba(31,111,139,.15);color:var(--area)}
+.export-uav-card{border:1px solid var(--rule);border-radius:8px;padding:8px 10px;background:var(--card-bg)}
+.export-uav-card .euc-title{font-weight:600;font-size:13px;margin-bottom:6px}
+.export-uav-card .euc-count{color:var(--muted);font-weight:400}
+.export-links{display:flex;gap:8px}
+.export-link{flex:1;text-align:center;text-decoration:none;box-sizing:border-box}
+
+/* ---- новое меню справа: вкладки Парк / История / Создать задачу (заменяет
+   прежний верхний степпер + постоянную левую панель парка, по запросу
+   пользователя) ---- */
+.catalog-tabs{display:flex;flex-direction:column;gap:2px;margin:0 0 16px;padding-bottom:14px;border-bottom:1px solid var(--rule)}
+.catalog-tabs button{width:100%;text-align:left;background:none;border:none;border-left:3px solid transparent;border-radius:0 6px 6px 0;padding:9px 10px;font-size:13px;color:var(--muted);cursor:pointer;font-family:inherit}
+.catalog-tabs button.active{color:var(--ink);border-left-color:var(--area);background:var(--area-soft);font-weight:600}
+.catalog-tabs button:hover:not(.active){color:var(--ink);background:var(--card-bg)}
+.tg-header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 0 14px}
+.tg-header .sb-title{margin:0 0 2px}
+.tg-header .sb-sub{margin:0}
+.tg-empty{margin:30px auto 0;text-align:center;color:var(--muted)}
+.tg-empty .btn{margin-top:14px}
+.task-cards{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.task-card{display:block;background:var(--card-bg);border:1px solid var(--rule);border-radius:10px;overflow:hidden;text-decoration:none;color:var(--ink);cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.task-card:hover{border-color:var(--area);box-shadow:0 4px 14px rgba(0,0,0,.10)}
+.task-card .tc-thumb{height:100px;background:var(--panel);position:relative}
+.task-card .tc-thumb .tc-map{position:absolute;inset:0}
+/* Скрывает интерактивные leaflet-контролы/атрибуцию на миниатюре — карточка кликабельна целиком, своя карта внутри не должна перехватывать клики или скроллить страницу. */
+.task-card .tc-thumb .tc-map{pointer-events:none}
+.task-card .tc-body{padding:9px 11px 11px}
+.task-card .tc-name{font-weight:600;font-size:13.5px;display:block;margin-bottom:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task-card .tc-meta{font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:2px}
+.task-card .status-badge{margin:8px 0 0}
+.pick-list{list-style:none;margin:0 0 4px;padding:0;display:flex;flex-direction:column;gap:6px;max-height:180px;overflow-y:auto}
+.pick-list label{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--rule);border-radius:6px;background:var(--card-bg);cursor:pointer;font-size:13px}
+.pick-list label:has(input:checked){border-color:var(--area);background:var(--area-soft)}
+.pick-list input{flex:none}
+.pick-list .pl-meta{color:var(--muted);font-size:11.5px;margin-left:auto;text-align:right}
 .warning-box{font-size:13px;background:rgba(184,112,15,.12);border-left:3px solid var(--uav2);padding:8px 10px;border-radius:0 6px 6px 0;margin:0 0 14px}
 .detail-actions{display:flex;gap:10px;margin-top:4px}
 .detail-actions .btn{flex:1}
@@ -177,6 +205,9 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 .sc-violations li[data-vid]{cursor:pointer}
 .sc-violations li.hl-active{background:var(--zone-soft);border-left-color:var(--zone);color:var(--zone);box-shadow:0 0 0 1px var(--zone) inset}
 .sc-violations li.hl-dim{opacity:.4;background:var(--panel);border-left-color:var(--rule);color:var(--muted)}
+.violation-row{display:flex;align-items:flex-start;gap:7px;cursor:pointer;margin:0}
+.violation-row input{margin-top:2px;flex:none;cursor:pointer}
+.violation-row span{flex:1}
 
 /* ---- расписание вылетов: раскрывающиеся этапы (ИНТ.ФТ.15) ---- */
 .sortie-row{cursor:pointer}
@@ -198,17 +229,14 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       <span class="brand-name">Галс</span>
     </div>
     <div id="stepper"></div>
+    <button type="button" class="btn" id="btn-home" title="Закрыть текущую задачу и вернуться к спискам парков, истории миссий и созданию новой задачи" hidden>&larr; Выйти из задачи, к каталогу</button>
   </div>
   <div id="main">
-    <aside id="fleet-panel"></aside>
+    <aside id="sidebar" hidden></aside>
     <div id="map-area">
       <div id="map"></div>
-      <div id="launch-overlay">
-        <button id="btn-load" type="button">Загрузить данные</button>
-      </div>
       <div class="legend" id="legend" hidden></div>
     </div>
-    <aside id="sidebar" hidden></aside>
   </div>
 </div>
 
@@ -232,11 +260,15 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 
 <div class="modal-backdrop" id="fleet-upload-modal" hidden>
   <div class="modal">
-    <h2>Загрузка парка БВС</h2>
+    <h2>Новый парк БВС</h2>
     <form id="fleet-upload-form">
+      <label for="ff-name">Наименование парка</label>
+      <input type="text" id="ff-name" name="name" required placeholder="Например, «Парк Екатеринбург»">
+      <label for="ff-loc-name">Место базирования (текст, необязательно)</label>
+      <input type="text" id="ff-loc-name" name="location_name" placeholder="Например, «Екатеринбург»">
       <label for="ff-file">Файл парка (JSON или CSV)</label>
       <input type="file" id="ff-file" name="file" accept=".json,.csv,application/json,text/csv" required>
-      <p class="hint">Поля/колонки: <code>inventory_number</code>, <code>model</code> (ключ модели, например <code>geoscan-201</code>), необязательно <code>base_launch_site</code>, <code>location_lat</code>/<code>location_lon</code> (WGS-84 — где сейчас стоит БВС, у разных экземпляров могут отличаться), <code>status</code> (по умолчанию «Готов»).</p>
+      <p class="hint">Поля/колонки: <code>inventory_number</code>, <code>model</code> (ключ модели, например <code>geoscan-201</code>), необязательно <code>base_launch_site</code>, <code>status</code> (по умолчанию «Готов»), <code>location_lat</code>/<code>location_lon</code> (WGS-84, координаты конкретного БВС). Широта и долгота базы парка вручную не вводятся — они вычисляются по координатам экземпляров из этого файла (нужен хотя бы один экземпляр с указанной локацией) и используются для проверки совместимости парка с обстановкой при постановке задачи.</p>
       <p class="error" id="fleet-upload-error" hidden></p>
       <div class="actions">
         <button type="button" class="btn" id="fleet-btn-cancel">Отмена</button>
@@ -263,10 +295,15 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   };
   var INVALID_STYLE = { color: "#c62828", weight: 3, dashArray: "6 4", fillOpacity: 0.12 };
 
+  // Спутниковая подложка Esri World Imagery — по запросу пользователя, без
+  // данных OpenStreetMap (в отличие от CARTO Positron, которую использовали
+  // раньше: та тоже основана на данных OSM, просто иначе раскрашена).
+  // Бесплатно для этого масштаба использования, без API-ключа; требуемая
+  // атрибуция Esri указана явно.
   var map = L.map("map", { zoomControl: true }).setView([55.75, 37.6], 6);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
     maxZoom: 19,
-    attribution: "&copy; OpenStreetMap"
+    attribution: "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community"
   }).addTo(map);
 
   var layerGroups = {
@@ -281,7 +318,6 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   var sortieRouteLayers = {};    // индекс вылета -> {layer, color} текущего плана на карте (Экраны 4-5)
   var expandedSortieIndices = {}; // индексы вылетов с раскрытым подробным расписанием (несколько сразу)
   var drawClickHandler = null;
-  var currentFleetModels = [];   // ПБС.ФТ.10: справочник моделей, кэш для карточки экземпляра
 
   // ---------- ЗАД.ФТ.9: область облета — рисование полигона кликами по карте ----------
   function pointsToPolygonGeoJSON(points) {
@@ -366,6 +402,10 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   function renderStepper(activeIndex, doneIndexes, onClick) {
     var el = document.getElementById("stepper");
     el.innerHTML = "";
+    // Кнопка «К каталогу» осмысленна только внутри уже открытой задачи (где
+    // и виден степпер) — в каталоге (вкладки Парк/История/Создать задачу)
+    // она была бы лишней и непонятной, поэтому скрыта там (см. clearStepper()).
+    document.getElementById("btn-home").hidden = false;
     STEPS.forEach(function (label, i) {
       if (i > 0) {
         var sep = document.createElement("div");
@@ -387,7 +427,6 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       el.appendChild(step);
     });
   }
-  renderStepper(0, []);
 
   // ---------- toast (ИНТ.ФТ.19) ----------
   function toast(message, isError) {
@@ -417,15 +456,17 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     promise.then(restore, restore);
   }
 
-  // ---------- модальное окно загрузки (открывается и с экрана запуска, и повторно — ОБС.ФТ.8) ----------
+  // ---------- модальное окно загрузки (открывается из нескольких мест — ОБС.ФТ.8) ----------
   var modal = document.getElementById("upload-modal");
-  function openEnvironmentUploadModal() {
+  var afterEnvironmentUpload = null; // необязательный колбэк(summary) — переопределяет переход по умолчанию (loadEnvironment)
+  function openEnvironmentUploadModal(onDone) {
+    afterEnvironmentUpload = onDone || null;
     document.getElementById("upload-form").reset();
     document.getElementById("upload-error").hidden = true;
     modal.hidden = false;
   }
-  document.getElementById("btn-load").addEventListener("click", openEnvironmentUploadModal);
   document.getElementById("btn-cancel").addEventListener("click", function () { modal.hidden = true; });
+  document.getElementById("btn-home").addEventListener("click", function (e) { e.preventDefault(); showCatalogScreen(lastCatalogTab); });
 
   document.getElementById("upload-form").addEventListener("submit", function (e) {
     e.preventDefault();
@@ -449,7 +490,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       .then(function (summary) {
         modal.hidden = true;
         toast("Обстановка «" + summary.name + "» загружена: " + summary.status, summary.status !== "Корректна");
-        loadEnvironment(summary.id);
+        if (afterEnvironmentUpload) { afterEnvironmentUpload(summary); } else { loadEnvironment(summary.id); }
       })
       .catch(function (err) {
         errorEl.textContent = err.message;
@@ -461,9 +502,15 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       });
   });
 
-  // ---------- модуль «Парк БВС» — постоянная панель слева, независима от степпера сценария ----------
+  // ---------- модальное окно загрузки нового парка БВС (переоткрывается из вкладки «Парк») ----------
   var fleetModal = document.getElementById("fleet-upload-modal");
-  var currentFleetData = null; // кэш последнего /api/fleet — для возврата к списку без повторного запроса
+  var afterFleetUpload = null; // необязательный колбэк(summary)
+  function openFleetUploadModal(onDone) {
+    afterFleetUpload = onDone || null;
+    document.getElementById("fleet-upload-form").reset();
+    document.getElementById("fleet-upload-error").hidden = true;
+    fleetModal.hidden = false;
+  }
   document.getElementById("fleet-btn-cancel").addEventListener("click", function () { fleetModal.hidden = true; });
 
   document.getElementById("fleet-upload-form").addEventListener("submit", function (e) {
@@ -475,9 +522,12 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     submitBtn.textContent = "Проверка...";
 
     var form = new FormData();
+    form.append("name", document.getElementById("ff-name").value);
+    var locName = document.getElementById("ff-loc-name").value;
+    if (locName) form.append("location_name", locName);
     form.append("file", document.getElementById("ff-file").files[0]);
 
-    fetch("/api/fleet", { method: "POST", body: form })
+    fetch("/api/fleets", { method: "POST", body: form })
       .then(function (res) {
         if (!res.ok) {
           return res.json().then(function (body) { throw new Error(body.detail || "Ошибка загрузки"); });
@@ -486,8 +536,8 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       })
       .then(function (summary) {
         fleetModal.hidden = true;
-        toast("Парк загружен: " + summary.status + " (" + summary.ready_count + "/" + summary.total + " готовы)", summary.status !== "Корректна");
-        loadFleetPanel();
+        toast("Парк «" + summary.name + "» загружен: " + summary.status + " (" + summary.ready_count + "/" + summary.total + " готовы)", summary.status !== "Корректна");
+        if (afterFleetUpload) afterFleetUpload(summary);
       })
       .catch(function (err) {
         errorEl.textContent = err.message;
@@ -498,21 +548,17 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
         submitBtn.textContent = "Проверить и сохранить";
       });
   });
-
-  function loadFleetPanel() {
-    Promise.all([
-      fetch("/api/fleet").then(function (r) { return r.status === 404 ? null : r.json(); }),
-      fetch("/api/fleet/models").then(function (r) { return r.json(); })
-    ]).then(function (results) {
-      currentFleetData = results[0];
-      currentFleetModels = results[1];
-      renderFleetPanel(currentFleetData, currentFleetModels);
-    });
-  }
-  loadFleetPanel(); // панель парка БВС всегда видна, не привязана к шагам сценария
-
   var FLEET_STATUS_COLOR = { "Готов": "#4E7F22", "Недоступен": "#B0266F", "На обслуживании": "#B8700F" };
   var fleetInstanceMarkers = {}; // inventory_number -> L.CircleMarker текущей локации на карте
+  var fleetModelsCache = null;   // ПБС.ФТ.10: справочник моделей — не меняется, загружается один раз
+
+  function fetchFleetModels() {
+    if (fleetModelsCache) return Promise.resolve(fleetModelsCache);
+    return fetch("/api/fleets/models").then(function (r) { return r.json(); }).then(function (models) {
+      fleetModelsCache = models;
+      return models;
+    });
+  }
 
   function renderFleetLocationsOnMap(instances) {
     layerGroups.fleet_locations.clearLayers();
@@ -560,7 +606,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     }).join("");
   }
 
-  function renderFleetInstanceList(instances) {
+  function renderFleetInstanceList(instances, models, fleet) {
     var listEl = document.getElementById("fleet-instance-list");
     if (!listEl) return;
     var search = (document.getElementById("fleet-search").value || "").toLowerCase();
@@ -579,8 +625,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     listEl.innerHTML = filtered.map(function (i) {
       var statusClass = i.status === "Готов" ? "ok" : (i.status === "Недоступен" ? "bad" : "draft");
       var hasLocation = i.location_lat != null && i.location_lon != null;
-      return '<li><a href="#" data-inv="' + escapeHtml(i.inventory_number) + '">' +
-        '<span class="t-name">' + escapeHtml(i.inventory_number) + (i.valid === false ? " ⚠" : "") +
+      return '<li><a href="#" data-inv="' + escapeHtml(i.inventory_number) + '"><span class="t-name">' + escapeHtml(i.inventory_number) + (i.valid === false ? " ⚠" : "") +
         (hasLocation ? ' <span class="loc-dot" title="Есть локация">&#9679;</span>' : "") + "</span>" +
         '<span class="t-meta">' + escapeHtml(i.model_name) + ' · <span class="status-badge ' + statusClass + '" style="margin:0;padding:1px 7px">' + i.status + "</span></span>" +
         "</a></li>";
@@ -590,18 +635,18 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
         e.preventDefault();
         var inv = a.getAttribute("data-inv");
         var instance = instances.filter(function (i) { return i.inventory_number === inv; })[0];
-        renderFleetInstanceCard(instance);
+        renderFleetInstanceCard(instance, models, fleet);
         focusOnFleetInstance(instance);
       });
     });
   }
 
-  function renderFleetInstanceCard(instance) {
-    var model = currentFleetModels.filter(function (m) { return m.key === instance.model_key; })[0];
-    var el = document.getElementById("fleet-panel");
+  function renderFleetInstanceCard(instance, models, fleet) {
+    var model = models.filter(function (m) { return m.key === instance.model_key; })[0];
+    var el = document.getElementById("sidebar");
     var statusClass = instance.status === "Готов" ? "ok" : (instance.status === "Недоступен" ? "bad" : "draft");
     var html = "";
-    html += '<a href="#" class="back-link" id="btn-back-to-fleet-list">&larr; К списку парка</a>';
+    html += '<a href="#" class="back-link" id="btn-back-to-fleet-instances">&larr; К парку «' + escapeHtml(fleet.name) + '»</a>';
     html += '<p class="sb-title">' + escapeHtml(instance.inventory_number) + "</p>";
     html += '<span class="status-badge ' + statusClass + '">' + instance.status + "</span>";
     if (instance.error) {
@@ -627,28 +672,87 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       html += '<button class="btn" id="btn-focus-fleet-instance" style="width:100%">Показать на карте</button>';
     }
     el.innerHTML = html;
-    document.getElementById("btn-back-to-fleet-list").addEventListener("click", function (e) {
+    document.getElementById("btn-back-to-fleet-instances").addEventListener("click", function (e) {
       e.preventDefault();
-      renderFleetPanel(currentFleetData, currentFleetModels);
+      renderParkDetailTab(fleet.id);
     });
     if (hasLocation) {
       document.getElementById("btn-focus-fleet-instance").addEventListener("click", function () { focusOnFleetInstance(instance); });
     }
   }
 
-  function renderFleetPanel(fleet, models) {
-    var el = document.getElementById("fleet-panel");
-    var html = "";
-    html += '<p class="sb-title">Парк БВС</p>';
-    html += '<button class="btn primary" id="btn-upload-fleet" style="width:100%;margin-bottom:14px">Загрузить парк</button>';
+  // ---------- Вкладка «Парк»: список парков (карточки) -> детали парка (список
+  // экземпляров + отметки на карте) — по запросу пользователя, заменяет
+  // прежнюю постоянную левую панель ----------
+  function renderParkThumb(container, fleet) {
+    var thumbMap = L.map(container, {
+      zoomControl: false, attributionControl: false, dragging: false,
+      scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false,
+      keyboard: false, tap: false, touchZoom: false, fadeAnimation: false
+    });
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19 }).addTo(thumbMap);
+    thumbMap.setView([fleet.location_lat, fleet.location_lon], 9);
+    L.circleMarker([fleet.location_lat, fleet.location_lon], {
+      radius: 7, color: "#fff", weight: 2, fillColor: "#1F6F8B", fillOpacity: 0.95
+    }).addTo(thumbMap);
+    taskCardMaps.push(thumbMap); // общий список мини-карт карточек (см. destroyTaskCardMaps) — переиспользуется между вкладками
+  }
 
-    if (!fleet) {
-      html += '<p class="sb-sub">Парк не загружен. Загрузите файл JSON или CSV с перечнем экземпляров БВС.</p>';
-    } else {
+  function renderParkListTab() {
+    var el = document.getElementById("sidebar");
+    destroyTaskCardMaps();
+    layerGroups.fleet_locations.clearLayers();
+    fetch("/api/fleets").then(function (r) { return r.json(); }).then(function (fleets) {
+      var html = catalogTabsHtml("park");
+      html += '<button class="btn primary" id="btn-upload-fleet" style="width:100%;margin-bottom:14px">Загрузить парк</button>';
+      if (!fleets.length) {
+        html += '<div class="tg-empty"><p>Пока нет ни одного парка. Загрузите файл JSON или CSV с перечнем экземпляров БВС.</p></div>';
+      } else {
+        html += '<ul class="task-cards">';
+        fleets.forEach(function (f) {
+          var ok = f.status === "Корректна";
+          html += '<li><a href="#" class="task-card" data-id="' + f.id + '">' +
+            '<div class="tc-thumb"><div class="tc-map" id="fl-map-' + f.id + '"></div></div>' +
+            '<div class="tc-body">' +
+            '<span class="tc-name">' + escapeHtml(f.name) + "</span>" +
+            '<span class="tc-meta"><span>' + (f.location_name ? escapeHtml(f.location_name) : f.location_lat.toFixed(2) + ", " + f.location_lon.toFixed(2)) + "</span>" +
+            "<span>" + f.ready_count + "/" + f.total + " готовы</span></span>" +
+            '<span class="status-badge ' + (ok ? "ok" : "bad") + '">' + f.status + "</span>" +
+            "</div></a></li>";
+        });
+        html += "</ul>";
+      }
+      el.innerHTML = html;
+      el.hidden = false;
+      wireCatalogTabs("park");
+      document.getElementById("btn-upload-fleet").addEventListener("click", function () {
+        openFleetUploadModal(function () { renderParkListTab(); });
+      });
+      el.querySelectorAll(".task-card").forEach(function (a) {
+        a.addEventListener("click", function (e) { e.preventDefault(); renderParkDetailTab(a.getAttribute("data-id")); });
+      });
+      fleets.forEach(function (f) {
+        var container = document.getElementById("fl-map-" + f.id);
+        if (container) renderParkThumb(container, f);
+      });
+    });
+  }
+
+  function renderParkDetailTab(fleetId) {
+    var el = document.getElementById("sidebar");
+    destroyTaskCardMaps();
+    Promise.all([
+      fetch("/api/fleets/" + fleetId).then(function (r) { return r.json(); }),
+      fetchFleetModels()
+    ]).then(function (results) {
+      var fleet = results[0], models = results[1];
       var ok = fleet.status === "Корректна";
-      html += '<p class="sb-sub">Загружен: ' + new Date(fleet.uploaded_at).toLocaleString("ru-RU") + "</p>";
+      var html = catalogTabsHtml("park");
+      html += '<a href="#" class="back-link" id="btn-back-to-fleet-list">&larr; К списку парков</a>';
+      html += '<p class="sb-title">' + escapeHtml(fleet.name) + "</p>";
+      html += '<p class="sb-sub">' + (fleet.location_name ? escapeHtml(fleet.location_name) + " · " : "") +
+        fleet.location_lat.toFixed(5) + ", " + fleet.location_lon.toFixed(5) + "</p>";
       html += '<span class="status-badge ' + (ok ? "ok" : "bad") + '">' + fleet.status + " · " + fleet.ready_count + "/" + fleet.total + " готовы</span>";
-
       if (!ok) {
         html += '<ul class="errors-list">';
         fleet.errors.forEach(function (e) {
@@ -656,48 +760,39 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
         });
         html += "</ul>";
       }
-
       html += '<div class="row2" style="margin-bottom:8px">' +
         '<input type="text" id="fleet-search" placeholder="Поиск по номеру">' +
         '<select id="fleet-model-filter"><option value="">Все модели</option>' +
         models.map(function (m) { return '<option value="' + m.key + '">' + escapeHtml(m.name) + "</option>"; }).join("") +
-        "</select>" +
-        "</div>";
+        "</select></div>";
       html += '<div class="row2" style="margin-bottom:8px">' +
         '<select id="fleet-status-filter" style="grid-column:1/-1"><option value="">Все статусы</option>' +
         READINESS_STATUSES.map(function (s) { return '<option value="' + s + '">' + s + "</option>"; }).join("") +
-        "</select>" +
-        "</div>";
-
+        "</select></div>";
       html += '<ul class="task-list" id="fleet-instance-list"></ul>';
-    }
+      html += '<div class="history"><h3>Справочник моделей</h3><div id="model-reference"></div></div>';
+      el.innerHTML = html;
+      el.hidden = false;
+      wireCatalogTabs("park");
 
-    html += '<div class="history"><h3>Справочник моделей</h3><div id="model-reference"></div></div>';
-
-    el.innerHTML = html;
-
-    document.getElementById("btn-upload-fleet").addEventListener("click", function () {
-      document.getElementById("fleet-upload-error").hidden = true;
-      fleetModal.hidden = false;
+      document.getElementById("btn-back-to-fleet-list").addEventListener("click", function (e) { e.preventDefault(); renderParkListTab(); });
+      renderModelReference(models);
+      renderFleetLocationsOnMap(fleet.instances);
+      map.setView([fleet.location_lat, fleet.location_lon], 11);
+      renderFleetInstanceList(fleet.instances, models, fleet);
+      ["fleet-search", "fleet-model-filter", "fleet-status-filter"].forEach(function (id) {
+        document.getElementById(id).addEventListener(id === "fleet-search" ? "input" : "change", function () {
+          renderFleetInstanceList(fleet.instances, models, fleet);
+        });
+      });
     });
-
-    renderModelReference(models);
-    renderFleetLocationsOnMap(fleet ? fleet.instances : []);
-
-    if (fleet) {
-      renderFleetInstanceList(fleet.instances);
-      document.getElementById("fleet-search").addEventListener("input", function () { renderFleetInstanceList(fleet.instances); });
-      document.getElementById("fleet-model-filter").addEventListener("change", function () { renderFleetInstanceList(fleet.instances); });
-      document.getElementById("fleet-status-filter").addEventListener("change", function () { renderFleetInstanceList(fleet.instances); });
-    }
   }
 
   // ---------- Экран 2: отображение обстановки ----------
   function clearMapLayers() {
-    // fleet_locations не входит в сюда: парк БВС — постоянная, независимая от
-    // сценария панель (см. #fleet-panel), её маркеры не должны исчезать при
-    // смене обстановки/задачи/плана.
-    Object.keys(layerGroups).forEach(function (k) { if (k !== "fleet_locations") layerGroups[k].clearLayers(); });
+    // fleet_locations больше не постоянная панель (парк теперь — вкладка
+    // «Парк», см. renderParkDetailTab) — очищается вместе со всеми слоями.
+    Object.keys(layerGroups).forEach(function (k) { layerGroups[k].clearLayers(); });
   }
 
   function styleFor(layerName, feature) {
@@ -867,6 +962,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   function showEnvironmentScreen() {
     if (!currentEnvironment) return;
     disableDrawMode();
+    destroyTaskCardMaps();
     layerGroups.task_area.clearLayers();
     renderLayers(currentEnvironment);
     renderLegend(currentEnvironment);
@@ -875,7 +971,350 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     renderStepper(0, currentEnvironment.status === "Корректна" ? [0] : [], onClick);
   }
 
-  // ---------- Экран 3: список задач (ЗАД.ФТ.6-8) ----------
+  // ---------- Новое меню справа: вкладки «Парк» / «История» / «Создать задачу»
+  // (по запросу пользователя — заменяет прежний верхний степпер + постоянную
+  // левую панель парка как основную навигацию). Степпер сценария (Экраны
+  // 1-2-4-5-6) остаётся только внутри уже открытой задачи. ---------- ----------
+  var CATALOG_TABS = [["park", "Парк"], ["history", "История"], ["create", "Создать задачу"]];
+  var lastCatalogTab = "park";
+
+  function catalogTabsHtml(active) {
+    return '<div class="catalog-tabs">' + CATALOG_TABS.map(function (t) {
+      return '<button type="button" data-tab="' + t[0] + '" class="' + (t[0] === active ? "active" : "") + '">' + t[1] + "</button>";
+    }).join("") + "</div>";
+  }
+
+  function wireCatalogTabs(active) {
+    document.querySelectorAll(".catalog-tabs button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var tab = btn.getAttribute("data-tab");
+        if (tab !== active) showCatalogScreen(tab);
+      });
+    });
+  }
+
+  function clearStepper() {
+    document.getElementById("stepper").innerHTML = "";
+    document.getElementById("btn-home").hidden = true;
+  }
+
+  function showCatalogScreen(tab) {
+    disableDrawMode();
+    lastCatalogTab = tab;
+    clearStepper();
+    layerGroups.plan_routes.clearLayers();
+    layerGroups.safety_violations.clearLayers();
+    layerGroups.task_area.clearLayers();
+    if (tab === "park") { renderParkListTab(); }
+    else if (tab === "history") { renderHistoryTab(); }
+    else { renderCreateTaskTab(); }
+  }
+
+  // ---------- Вкладка «История»: карточки всех миссий (всех задач по всем
+  // обстановкам), сверху миниатюра карты области облета, снизу название/дата/
+  // место; клик открывает карту со всеми данными о миссии. ----------
+  var taskCardMaps = []; // мини-карты превью карточек (История и Парк) — пересоздаются при каждой отрисовке вкладки, старые нужно явно уничтожать (Leaflet не делает это сам)
+
+  function destroyTaskCardMaps() {
+    taskCardMaps.forEach(function (m) { m.remove(); });
+    taskCardMaps = [];
+  }
+
+  var TASK_STATUS_BADGE_CLASS = { "Черновик": "draft", "Рассчитана": "reviewed", "Подтверждена": "ok" };
+
+  function taskStatusBadgeHtml(status) {
+    return '<span class="status-badge ' + (TASK_STATUS_BADGE_CLASS[status] || "draft") + '">' + escapeHtml(status) + "</span>";
+  }
+
+  function renderTaskCardThumb(container, areaGeojson) {
+    var thumbMap = L.map(container, {
+      zoomControl: false, attributionControl: false, dragging: false,
+      scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false,
+      keyboard: false, tap: false, touchZoom: false, fadeAnimation: false
+    });
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19
+    }).addTo(thumbMap);
+    var areaLayer = L.geoJSON({ type: "Feature", geometry: areaGeojson, properties: {} }, {
+      style: { color: "#B8700F", weight: 2, fillColor: "#B8700F", fillOpacity: 0.25 }
+    }).addTo(thumbMap);
+    var bounds = areaLayer.getBounds();
+    if (bounds.isValid()) {
+      thumbMap.fitBounds(bounds, { padding: [16, 16] });
+    } else {
+      thumbMap.setView([55.75, 37.6], 4);
+    }
+    taskCardMaps.push(thumbMap);
+  }
+
+  function renderHistoryTab() {
+    var el = document.getElementById("sidebar");
+    destroyTaskCardMaps();
+    fetch("/api/tasks").then(function (r) { return r.json(); }).then(function (tasks) {
+      var html = catalogTabsHtml("history");
+      html += '<p class="sb-title">История</p>';
+      html += '<p class="sb-sub">Все миссии по всем обстановкам' + (tasks.length ? " · " + tasks.length : "") + '</p>';
+
+      if (tasks.length) {
+        html += '<ul class="task-cards">';
+        tasks.forEach(function (t) {
+          html += '<li><a href="#" class="task-card" data-id="' + t.id + '">' +
+            '<div class="tc-thumb"><div class="tc-map" id="tc-map-' + t.id + '"></div></div>' +
+            '<div class="tc-body">' +
+            '<span class="tc-name">' + escapeHtml(t.name) + "</span>" +
+            '<span class="tc-meta">' +
+            "<span>" + t.work_date + "</span>" +
+            "<span>" + escapeHtml(t.environment_name) + "</span>" +
+            "</span>" +
+            taskStatusBadgeHtml(t.status) +
+            "</div></a></li>";
+        });
+        html += "</ul>";
+      } else {
+        html += '<div class="tg-empty"><p>Миссии пока не созданы.</p></div>';
+      }
+
+      el.innerHTML = html;
+      el.hidden = false;
+      wireCatalogTabs("history");
+      el.querySelectorAll(".task-card").forEach(function (a) {
+        a.addEventListener("click", function (e) { e.preventDefault(); loadTask(a.getAttribute("data-id")); });
+      });
+
+      // Мини-карты создаются после того, как контейнеры реально в DOM (Leaflet
+      // на инициализации читает размеры контейнера) — отдельным проходом.
+      tasks.forEach(function (t) {
+        var container = document.getElementById("tc-map-" + t.id);
+        if (container) renderTaskCardThumb(container, t.area);
+      });
+    });
+  }
+
+  // ---------- Вкладка «Создать задачу»: чек-боксами выбирается парк и
+  // обстановка (совместимость по расстоянию проверяется на сервере при
+  // сохранении, см. task_service._check_fleet_environment_compatibility),
+  // затем — обычная форма параметров задачи. ---------- ----------
+  var newTaskSelection = { environmentId: null, fleetId: null };
+
+  function renderCreateTaskTab() {
+    var el = document.getElementById("sidebar");
+    destroyTaskCardMaps();
+    Promise.all([
+      fetch("/api/environments").then(function (r) { return r.json(); }),
+      fetch("/api/fleets").then(function (r) { return r.json(); })
+    ]).then(function (results) {
+      renderCreateTaskPickers(results[0], results[1]);
+    });
+  }
+
+  function renderCreateTaskPickers(environments, fleets) {
+    var el = document.getElementById("sidebar");
+    var html = catalogTabsHtml("create");
+    html += '<p class="sb-title">Новая задача</p>';
+    html += '<p class="sb-sub">Выберите обстановку и парк БВС — совместимость по расстоянию проверяется при сохранении задачи.</p>';
+
+    html += '<label style="display:flex;align-items:center;justify-content:space-between">Обстановка' +
+      '<button type="button" class="btn" id="btn-new-env" style="padding:3px 10px;font-size:11.5px">+ Загрузить</button></label>';
+    if (environments.length) {
+      html += '<ul class="pick-list" id="pick-env-list">' + environments.map(function (e) {
+        var disabled = e.status !== "Корректна";
+        return '<label><input type="radio" name="pick-env" value="' + e.id + '"' +
+          (disabled ? " disabled" : "") + (newTaskSelection.environmentId === e.id ? " checked" : "") + ">" +
+          escapeHtml(e.name) + '<span class="pl-meta">' + (disabled ? "с ошибками" : e.counts.airspace + " зон") + "</span></label>";
+      }).join("") + "</ul>";
+    } else {
+      html += '<p class="sb-sub">Обстановок пока нет.</p>';
+    }
+
+    html += '<label style="display:flex;align-items:center;justify-content:space-between;margin-top:14px">Парк БВС' +
+      '<button type="button" class="btn" id="btn-new-fleet" style="padding:3px 10px;font-size:11.5px">+ Загрузить</button></label>';
+    if (fleets.length) {
+      html += '<ul class="pick-list" id="pick-fleet-list">' + fleets.map(function (f) {
+        var disabled = f.status !== "Корректна" || f.ready_count === 0;
+        return '<label><input type="radio" name="pick-fleet" value="' + f.id + '"' +
+          (disabled ? " disabled" : "") + (newTaskSelection.fleetId === f.id ? " checked" : "") + ">" +
+          escapeHtml(f.name) + '<span class="pl-meta">' + f.ready_count + "/" + f.total + " готовы</span></label>";
+      }).join("") + "</ul>";
+    } else {
+      html += '<p class="sb-sub">Парков пока нет.</p>';
+    }
+
+    html += '<p class="error field-error" id="pick-error" hidden></p>';
+    html += '<button class="btn primary" id="btn-pick-next" style="width:100%;margin-top:14px">Далее</button>';
+
+    el.innerHTML = html;
+    el.hidden = false;
+    wireCatalogTabs("create");
+
+    document.getElementById("btn-new-env").addEventListener("click", function () {
+      openEnvironmentUploadModal(function (summary) {
+        newTaskSelection.environmentId = summary.id;
+        renderCreateTaskTab();
+      });
+    });
+    document.getElementById("btn-new-fleet").addEventListener("click", function () {
+      openFleetUploadModal(function (summary) {
+        newTaskSelection.fleetId = summary.id;
+        renderCreateTaskTab();
+      });
+    });
+    document.getElementById("btn-pick-next").addEventListener("click", function () {
+      var envInput = el.querySelector('input[name="pick-env"]:checked');
+      var fleetInput = el.querySelector('input[name="pick-fleet"]:checked');
+      var errorEl = document.getElementById("pick-error");
+      if (!envInput || !fleetInput) {
+        errorEl.textContent = "Выберите обстановку и парк БВС.";
+        errorEl.hidden = false;
+        return;
+      }
+      newTaskSelection.environmentId = envInput.value;
+      newTaskSelection.fleetId = fleetInput.value;
+      var env = environments.filter(function (e) { return e.id === envInput.value; })[0];
+      fetch("/api/environments/" + env.id).then(function (r) { return r.json(); }).then(function (fullEnv) {
+        currentEnvironment = fullEnv;
+        renderLayers(fullEnv);
+        renderLegend(fullEnv);
+        renderNewTaskFormTab();
+      });
+    });
+  }
+
+  function renderNewTaskFormTab() {
+    var el = document.getElementById("sidebar");
+    drawingPoints = [];
+    var html = catalogTabsHtml("create");
+    html += '<a href="#" class="back-link" id="btn-back-to-pickers">&larr; Обстановка/парк</a>';
+    html += '<p class="sb-title">Параметры задачи</p>';
+    html += '<p class="sb-sub">Обстановка: ' + escapeHtml(currentEnvironment.name) + '</p>';
+    html += '<form id="new-task-form" class="sb-form">';
+    html += field("Наименование", '<input type="text" name="name" required>');
+
+    html += "<label>Область облета</label>";
+    html += '<div class="mode-toggle">' +
+      '<label><input type="radio" name="area_mode" value="file" checked><span>Файл</span></label>' +
+      '<label><input type="radio" name="area_mode" value="map"><span>Нарисовать на карте</span></label>' +
+      "</div>";
+    html += '<div id="area-file-block">' +
+      '<input type="file" name="area_file" accept=".geojson,.json,application/geo+json,application/json" required>' +
+      "</div>";
+    html += '<div id="area-draw-block" hidden>' +
+      '<p class="hint">Кликайте на карте — каждый клик добавляет точку контура (минимум 3). Координаты точки можно скорректировать в текстовых полях ниже.</p>' +
+      '<div id="draw-points-list"></div>' +
+      '<div class="draw-actions">' +
+        '<button type="button" class="btn" id="btn-draw-undo">Удалить последнюю</button>' +
+        '<button type="button" class="btn" id="btn-draw-clear">Очистить</button>' +
+      "</div>" +
+      "</div>";
+
+    html += field("Тип съемки", selectHtml("survey_type", SURVEY_TYPES, "RGB"));
+    html += '<div class="row2">' +
+      field("Целевое разрешение GSD, см", '<input type="number" step="0.1" min="0.1" name="gsd_cm" required value="3.0">') +
+      field("Дата работ", '<input type="date" name="work_date" required value="' + todayDateStr() + '">') +
+      "</div>";
+    html += '<div class="row2">' +
+      field("Окно работ, с", '<input type="time" name="window_start">') +
+      field("Окно работ, по", '<input type="time" name="window_end">') +
+      "</div>";
+    html += '<div class="row2">' +
+      field("Скорость ветра, м/с", '<input type="number" step="0.1" min="0" name="wind_speed_ms">') +
+      field("Облачность, %", '<input type="number" step="1" min="0" max="100" name="cloud_cover_pct">') +
+      "</div>";
+    html += '<label>Критерий оптимизации</label><div class="criterion-group">' + ["Время", "Налет", "Компромисс"].map(function (m) {
+      return '<label><input type="radio" name="criterion_mode" value="' + m + '"' + (m === "Время" ? " checked" : "") + "><span>" + m + "</span></label>";
+    }).join("") + "</div>";
+    html += '<div class="alpha-row" id="alpha-row" hidden>' +
+      '<label>Вес времени α = <span id="alpha-value">0.5</span></label>' +
+      '<input type="range" name="criterion_alpha" min="0" max="1" step="0.05" value="0.5">' +
+      "</div>";
+    html += '<p class="error field-error" id="new-task-form-error" hidden></p>';
+    html += '<div class="actions"><button type="button" class="btn" id="new-task-cancel">Отмена</button>' +
+      '<button type="submit" class="btn primary" id="new-task-submit">Создать задачу</button></div>';
+    html += "</form>";
+    el.innerHTML = html;
+    el.hidden = false;
+    wireCatalogTabs("create");
+
+    renderDrawPointsList();
+    renderDrawPreview();
+    disableDrawMode();
+
+    var form = document.getElementById("new-task-form");
+    form.querySelectorAll('input[name="area_mode"]').forEach(function (r) {
+      r.addEventListener("change", function () {
+        var isMap = form.area_mode.value === "map";
+        document.getElementById("area-file-block").hidden = isMap;
+        document.getElementById("area-draw-block").hidden = !isMap;
+        form.querySelector('input[name="area_file"]').required = !isMap;
+        if (isMap) { enableDrawMode(); renderDrawPreview(); } else { disableDrawMode(); layerGroups.task_area.clearLayers(); }
+      });
+    });
+    document.getElementById("btn-draw-undo").addEventListener("click", function () { drawingPoints.pop(); renderDrawPointsList(); renderDrawPreview(); });
+    document.getElementById("btn-draw-clear").addEventListener("click", function () { drawingPoints = []; renderDrawPointsList(); renderDrawPreview(); });
+    form.querySelectorAll('input[name="criterion_mode"]').forEach(function (r) {
+      r.addEventListener("change", function () { document.getElementById("alpha-row").hidden = form.criterion_mode.value !== "Компромисс"; });
+    });
+    form.querySelector('input[name="criterion_alpha"]').addEventListener("input", function (e) {
+      document.getElementById("alpha-value").textContent = e.target.value;
+    });
+    document.getElementById("btn-back-to-pickers").addEventListener("click", function (e) { e.preventDefault(); disableDrawMode(); renderCreateTaskTab(); });
+    document.getElementById("new-task-cancel").addEventListener("click", function () { disableDrawMode(); renderCreateTaskTab(); });
+    form.addEventListener("submit", function (e) { e.preventDefault(); submitNewTaskForm(form); });
+  }
+
+  function submitNewTaskForm(form) {
+    var submitBtn = document.getElementById("new-task-submit");
+    var errorEl = document.getElementById("new-task-form-error");
+    errorEl.hidden = true;
+
+    var areaMode = form.area_mode.value;
+    if (areaMode === "map" && drawingPoints.length < 3) {
+      errorEl.textContent = "область облета: нужно минимум 3 точки, чтобы образовать полигон";
+      errorEl.hidden = false;
+      return;
+    }
+
+    submitBtn.disabled = true;
+    var fd = new FormData(form);
+    fd.delete("area_mode");
+    fd.append("environment_id", newTaskSelection.environmentId);
+    fd.append("fleet_id", newTaskSelection.fleetId);
+    if (fd.get("criterion_mode") !== "Компромисс") fd.delete("criterion_alpha");
+    ["wind_speed_ms", "cloud_cover_pct", "window_start", "window_end"].forEach(function (name) {
+      if (fd.get(name) === "") fd.delete(name);
+    });
+    if (areaMode === "map") {
+      var geojson = pointsToPolygonGeoJSON(drawingPoints);
+      fd.set("area_file", new Blob([JSON.stringify(geojson)], { type: "application/json" }), "area.geojson");
+    }
+
+    fetch("/api/tasks", { method: "POST", body: fd })
+      .then(function (res) {
+        if (!res.ok) {
+          return res.json().then(function (body) {
+            var detail = body.detail;
+            var msg = Array.isArray(detail) ? detail.map(function (i) { return i.field + ": " + i.message; }).join("; ") : (detail || "Ошибка сохранения");
+            throw new Error(msg);
+          });
+        }
+        return res.json();
+      })
+      .then(function (summary) {
+        disableDrawMode();
+        newTaskSelection = { environmentId: null, fleetId: null };
+        toast("Задача создана: " + summary.name, !!summary.daylight_warning);
+        loadTask(summary.id);
+      })
+      .catch(function (err) {
+        errorEl.textContent = err.message;
+        errorEl.hidden = false;
+      })
+      .finally(function () { submitBtn.disabled = false; });
+  }
+
+  // ---------- Экран 3: список задач одной обстановки (ЗАД.ФТ.6-8) — обычный
+  // текстовый список, доступен внутри уже открытой задачи (шаг степпера
+  // «Задача»); создание новой задачи из него по-прежнему возможно классической
+  // формой (см. renderTaskFormSidebar) — по запросу пользователя. ----------
   function showTaskListScreen() {
     if (!currentEnvironment) return;
     disableDrawMode();
@@ -910,7 +1349,13 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     el.hidden = false;
 
     document.getElementById("btn-back").addEventListener("click", function (e) { e.preventDefault(); showEnvironmentScreen(); });
-    document.getElementById("btn-new-task").addEventListener("click", function () { showTaskFormScreen(null); });
+    document.getElementById("btn-new-task").addEventListener("click", function () {
+      // Создание задачи теперь идёт через вкладку «Создать задачу» (выбор
+      // парка + обстановки чек-боксами) — эта кнопка просто предзаполняет
+      // уже открытую здесь обстановку, чтобы не выбирать её заново.
+      newTaskSelection.environmentId = currentEnvironment.id;
+      showCatalogScreen("create");
+    });
     el.querySelectorAll(".task-list a").forEach(function (a) {
       a.addEventListener("click", function (e) { e.preventDefault(); loadTask(a.getAttribute("data-id")); });
     });
@@ -935,6 +1380,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   }
 
   function showTaskFormScreen(existingTask) {
+    destroyTaskCardMaps();
     renderTaskFormSidebar(existingTask);
     renderStepper(1, [0], { 0: showEnvironmentScreen, 1: showTaskListScreen });
   }
@@ -1120,7 +1566,22 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 
   // ---------- Экран 3: карточка задачи (ЗАД.ФТ.11) ----------
   function loadTask(id) {
-    fetch("/api/tasks/" + id).then(function (r) { return r.json(); }).then(showTaskDetailScreen);
+    // Задача может относиться к другой обстановке, чем та, что сейчас
+    // загружена (или к никакой, если попали сюда со страницы «История» до
+    // загрузки данных вообще) — сначала догружаем нужную обстановку, чтобы
+    // карта показывала правильные зоны/препятствия под областью задачи.
+    fetch("/api/tasks/" + id).then(function (r) { return r.json(); }).then(function (task) {
+      if (currentEnvironment && currentEnvironment.id === task.environment_id) {
+        showTaskDetailScreen(task);
+        return;
+      }
+      fetch("/api/environments/" + task.environment_id).then(function (r) { return r.json(); }).then(function (env) {
+        currentEnvironment = env;
+        renderLayers(env);
+        renderLegend(env);
+        showTaskDetailScreen(task);
+      });
+    });
   }
 
   function renderTaskAreaOnMap(task) {
@@ -1182,6 +1643,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 
   function showTaskDetailScreen(task) {
     disableDrawMode();
+    destroyTaskCardMaps();
     setEnvironmentDim(true);
     layerGroups.plan_routes.clearLayers();
     layerGroups.safety_violations.clearLayers();
@@ -1216,6 +1678,16 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 
   function formatTime(iso) {
     return new Date(iso).toLocaleString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+
+  // ---------- ЭКС.ФТ.5: цветной индикатор статуса плана на всем его жизненном
+  // цикле (Черновик -> Проверен -> Подтвержден -> Выгружен) ----------
+  var PLAN_STATUS_BADGE_CLASS = { "Черновик": "draft", "Проверен": "reviewed", "Подтвержден": "ok", "Выгружен": "ok" };
+
+  function planStatusBadgeHtml(status) {
+    var cls = PLAN_STATUS_BADGE_CLASS[status] || "draft";
+    var suffix = status === "Выгружен" ? " ⤓" : ""; // иконка экспорта
+    return '<span class="status-badge ' + cls + '">' + escapeHtml(status) + suffix + "</span>";
   }
 
   function runPlanCalculation(task) {
@@ -1315,7 +1787,8 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     html += '<a href="#" class="back-link" id="btn-back">&larr; К задаче</a>';
     html += '<p class="sb-title">Результат расчета</p>';
     html += '<p class="sb-sub">' + escapeHtml(task.name) + " · версия " + plan.version + "</p>";
-    html += '<span class="status-badge ' + (hasWarnings ? "bad" : "ok") + '">' + (hasWarnings ? "Есть предупреждения" : "Рассчитан") + "</span>";
+    html += planStatusBadgeHtml(plan.status);
+    html += '<span class="status-badge ' + (hasWarnings ? "bad" : "ok") + '" style="margin-left:6px">' + (hasWarnings ? "Есть предупреждения" : "Рассчитан") + "</span>";
 
     if (hasWarnings) {
       html += '<ul class="errors-list">' + plan.warnings.map(function (w) { return "<li>" + escapeHtml(w) + "</li>"; }).join("") + "</ul>";
@@ -1406,6 +1879,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 
   function showPlanScreen(task, plan, versions) {
     disableDrawMode();
+    destroyTaskCardMaps();
     renderPlanRoutesOnMap(task, plan);
     renderPlanSidebar(task, plan, versions);
     renderStepper(2, [0, 1], {
@@ -1521,11 +1995,14 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       html += '<div class="sc-row"><span class="sc-dot"></span><span class="sc-label">' + escapeHtml(c.label) + '</span>' +
         '<span class="sc-result">' + (c.passed ? "пройдена" : "нарушение") + "</span></div>";
       if (!c.passed && c.violations.length) {
-        html += '<ul class="sc-violations">' + c.violations.map(function (v, i) {
+        html += '<ul class="sc-violations">' + c.violations.map(function (v) {
           var hasPoint = v.lat != null && v.lon != null;
-          var vid = c.name + "-" + i;
-          if (hasPoint) violationMarkers.push({ vid: vid, lat: v.lat, lon: v.lon, message: v.message });
-          return "<li" + (hasPoint ? ' data-vid="' + vid + '"' : "") + ">" + escapeHtml(v.message) + "</li>";
+          if (hasPoint) violationMarkers.push({ vid: v.id, lat: v.lat, lon: v.lon, message: v.message });
+          return "<li" + (hasPoint ? ' data-vid="' + v.id + '"' : "") + '>' +
+            '<label class="violation-row">' +
+            '<input type="checkbox" class="violation-ignore" data-violation-id="' + escapeHtml(v.id) + '"' + (v.ignored ? " checked" : "") + '>' +
+            "<span>" + escapeHtml(v.message) + "</span>" +
+            "</label></li>";
         }).join("") + "</ul>";
       }
       html += "</li>";
@@ -1535,10 +2012,17 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     if (!passed) {
       html += '<div class="detail-actions" style="margin-top:14px">';
       html += '<button class="btn" id="btn-safety-recheck">Повторить проверку</button>';
-      html += '<button class="btn primary" id="btn-safety-back-task">Вернуться к задаче</button>';
+      html += '<button class="btn" id="btn-safety-back-task">Вернуться к задаче</button>';
       html += "</div>";
+      if (report.violations_acknowledged) {
+        html += '<p class="hint" style="margin-top:10px">Все нарушения отмечены галочкой «принято» — план можно подтвердить и экспортировать, несмотря на них.</p>';
+        html += '<button class="btn primary" id="btn-go-export" style="width:100%;margin-top:4px">Подтвердить и перейти к экспорту</button>';
+      } else {
+        html += '<p class="hint" style="margin-top:10px">Отметьте галочкой каждое нарушение, которое оператор осознанно принимает — когда отмечены все, план можно будет подтвердить.</p>';
+      }
     } else {
-      html += '<p class="hint" style="margin-top:14px">Проверка пройдена. Подтверждение и экспорт плана — модуль «Подтверждение и экспорт», в этой версии не реализован.</p>';
+      html += '<p class="hint" style="margin-top:14px">Проверка пройдена без нарушений — план можно подтвердить и экспортировать.</p>';
+      html += '<button class="btn primary" id="btn-go-export" style="width:100%;margin-top:4px">Перейти к подтверждению и экспорту</button>';
     }
 
     el.innerHTML = html;
@@ -1551,6 +2035,37 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       });
       document.getElementById("btn-safety-back-task").addEventListener("click", function () { showTaskDetailScreen(task); });
     }
+    var goExportBtn = document.getElementById("btn-go-export");
+    if (goExportBtn) {
+      goExportBtn.addEventListener("click", function () {
+        loadExportScreen(report.plan_id, task);
+      });
+    }
+
+    // Галочка «принять нарушение» (по запросу пользователя, расширение поверх
+    // ЭКС.ФТ.2) — перерисовывает весь экран свежим отчетом, чтобы кнопка
+    // подтверждения и счетчик принятых нарушений сразу обновились.
+    document.querySelectorAll(".violation-ignore").forEach(function (cb) {
+      cb.addEventListener("change", function () {
+        var violationId = cb.getAttribute("data-violation-id");
+        var ignored = cb.checked;
+        cb.disabled = true;
+        var fd = new FormData();
+        fd.append("ignored", ignored ? "true" : "false");
+        fetch("/api/safety-checks/" + report.id + "/violations/" + encodeURIComponent(violationId) + "/ignore", {
+          method: "POST", body: fd
+        }).then(function (res) {
+          if (!res.ok) { return res.json().then(function (b) { throw new Error(b.detail || "Не удалось обновить отметку"); }); }
+          return res.json();
+        }).then(function (updatedReport) {
+          showSafetyScreen(task, plan, updatedReport);
+        }).catch(function (err) {
+          cb.checked = !ignored;
+          cb.disabled = false;
+          toast(err.message, true);
+        });
+      });
+    });
 
     renderSafetyViolationsOnMap(violationMarkers);
     document.querySelectorAll(".sc-violations li[data-vid]").forEach(function (li) {
@@ -1562,6 +2077,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 
   function showSafetyScreen(task, plan, report) {
     disableDrawMode();
+    destroyTaskCardMaps();
     renderPlanRoutesOnMap(task, plan);
     renderSafetySidebar(task, plan, report);
     renderStepper(3, [0, 1, 2], {
@@ -1569,6 +2085,138 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       1: function () { showTaskDetailScreen(task); },
       2: function () { loadPlan(plan.id, task); },
       3: function () { showSafetyScreen(task, plan, report); }
+    });
+  }
+
+  // ---------- Экран 6: подтверждение и экспорт (ЭКС.ФТ.1-9) ----------
+  function goToSafetyScreen(task, planId) {
+    Promise.all([
+      fetch("/api/plans/" + planId).then(function (r) { return r.json(); }),
+      fetch("/api/safety-checks/latest?plan_id=" + planId).then(function (r) { return r.ok ? r.json() : null; })
+    ]).then(function (results) {
+      if (results[1]) { showSafetyScreen(task, results[0], results[1]); } else { loadPlan(planId, task); }
+    });
+  }
+
+  function loadExportScreen(planId, task) {
+    Promise.all([
+      fetch("/api/plans/" + planId).then(function (r) { return r.json(); }),
+      fetch("/api/safety-checks/latest?plan_id=" + planId).then(function (r) { return r.ok ? r.json() : null; })
+    ]).then(function (results) {
+      showExportScreen(task, results[0], results[1]);
+    });
+  }
+
+  function confirmPlan(planId, confirmedBy) {
+    var fd = new FormData();
+    fd.append("confirmed_by", confirmedBy || "Оператор");
+    return fetch("/api/plans/" + planId + "/confirm", { method: "POST", body: fd }).then(function (res) {
+      if (!res.ok) {
+        return res.json().then(function (body) { throw new Error(body.detail || "Не удалось подтвердить план"); });
+      }
+      return res.json();
+    });
+  }
+
+  function renderExportSidebar(task, plan, report) {
+    var el = document.getElementById("sidebar");
+    var byUav = {};
+    plan.sorties.forEach(function (s) { (byUav[s.uav_id] = byUav[s.uav_id] || []).push(s); });
+    var uavIds = Object.keys(byUav);
+    // Пользовательское расширение поверх ЭКС.ФТ.2: если оператор явно отметил
+    // принятыми ВСЕ нарушения последнего отчета (галочки на Экране 5), план
+    // можно подтвердить и в статусе "Черновик" — сервер сам перепроверяет
+    // это условие (export_routes._violations_overridden), клиентский флаг
+    // ниже только решает, какую форму показать.
+    var canOverride = !!(report && report.status === "Есть нарушения" && report.violations_acknowledged);
+
+    var html = "";
+    html += '<a href="#" class="back-link" id="btn-back">&larr; К проверке безопасности</a>';
+    html += '<p class="sb-title">Подтверждение и экспорт</p>';
+    html += '<p class="sb-sub">' + escapeHtml(task.name) + " · план версии " + plan.version + "</p>";
+    html += planStatusBadgeHtml(plan.status);
+
+    if (plan.status === "Черновик" && canOverride) {
+      html += '<p class="hint" style="margin-top:10px">Проверка безопасности нашла нарушения, но оператор отметил принятыми все из них. План можно подтвердить в обход обычного запрета.</p>';
+      html += '<label for="confirm-by">ФИО подтверждающего</label>';
+      html += '<input type="text" id="confirm-by" value="Оператор">';
+      html += '<button class="btn primary" id="btn-confirm-plan" style="width:100%;margin-top:10px">Подтвердить план (с принятыми нарушениями)</button>';
+    } else if (plan.status === "Черновик") {
+      // ЭКС.ФТ.2: сюда можно попасть только по свежему "Пройдена" или по
+      // принятым нарушениям, но статус мог устареть, если пока открыт этот
+      // экран был запущен новый расчет/проверка.
+      html += '<p class="hint" style="margin-top:10px">План не прошел проверку безопасности без нарушений и не все нарушения отмечены принятыми — подтверждение недоступно. Вернитесь в модуль «Проверка безопасности».</p>';
+    } else if (plan.status === "Проверен") {
+      html += '<p class="hint" style="margin-top:10px">Проверка безопасности пройдена без нарушений. Подтвердите план, чтобы разблокировать экспорт маршрутов по каждому БВС.</p>';
+      html += '<label for="confirm-by">ФИО подтверждающего</label>';
+      html += '<input type="text" id="confirm-by" value="Оператор">';
+      html += '<button class="btn primary" id="btn-confirm-plan" style="width:100%;margin-top:10px">Подтвердить план</button>';
+    } else {
+      if (plan.confirmed_by || plan.confirmed_at) {
+        html += '<p class="hint" style="margin:10px 0 0">Подтвердил: ' + escapeHtml(plan.confirmed_by || "—") +
+          (plan.confirmed_at ? " · " + formatUtc(plan.confirmed_at) : "") + "</p>";
+      }
+      if (plan.confirmed_with_overrides) {
+        html += '<p class="hint" style="margin:4px 0 0;color:var(--uav2)">Подтвержден с принятыми нарушениями безопасности.</p>';
+      }
+      html += '<h3 style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.02em;margin:16px 0 8px">Экспорт по БВС</h3>';
+      html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">';
+      uavIds.forEach(function (uavId) {
+        html += '<div class="export-uav-card">';
+        html += '<div class="euc-title">' + escapeHtml(uavId) + ' <span class="euc-count">· ' + byUav[uavId].length + " вылет(ов)</span></div>";
+        html += '<div class="export-links">';
+        html += '<a class="btn export-link" download href="/api/plans/' + plan.id + '/export/kml/' + encodeURIComponent(uavId) + '">Скачать KML</a>';
+        html += '<a class="btn export-link" download href="/api/plans/' + plan.id + '/export/geojson/' + encodeURIComponent(uavId) + '">Скачать GeoJSON</a>';
+        html += "</div></div>";
+      });
+      html += "</div>";
+      html += '<a class="btn export-link" style="width:100%;display:block" download href="/api/plans/' + plan.id + '/export/zip">Скачать все (архив)</a>';
+    }
+
+    el.innerHTML = html;
+    el.hidden = false;
+
+    document.getElementById("btn-back").addEventListener("click", function (e) {
+      e.preventDefault();
+      goToSafetyScreen(task, plan.id);
+    });
+
+    var confirmBtn = document.getElementById("btn-confirm-plan");
+    if (confirmBtn) {
+      confirmBtn.addEventListener("click", function (e) {
+        var confirmedBy = document.getElementById("confirm-by").value.trim() || "Оператор";
+        withBusyButton(e.currentTarget, "Подтверждаем...", confirmPlan(plan.id, confirmedBy)
+          .then(function () {
+            toast("План подтвержден");
+            loadExportScreen(plan.id, task);
+          })
+          .catch(function (err) { toast(err.message, true); }));
+      });
+    }
+
+    // Статус "Выгружен" ставится сервером при первой успешной выгрузке
+    // (ЭКС.ФТ.7) — после клика по любой ссылке скачивания подтягиваем его
+    // сюда же, чтобы бейдж и текст обновились без ручного перехода назад-вперед.
+    el.querySelectorAll(".export-link").forEach(function (a) {
+      a.addEventListener("click", function () {
+        if (plan.status !== "Выгружен") {
+          setTimeout(function () { loadExportScreen(plan.id, task); }, 900);
+        }
+      });
+    });
+  }
+
+  function showExportScreen(task, plan, report) {
+    disableDrawMode();
+    destroyTaskCardMaps();
+    renderPlanRoutesOnMap(task, plan);
+    renderExportSidebar(task, plan, report);
+    renderStepper(4, [0, 1, 2, 3], {
+      0: showEnvironmentScreen,
+      1: function () { showTaskDetailScreen(task); },
+      2: function () { loadPlan(plan.id, task); },
+      3: function () { goToSafetyScreen(task, plan.id); },
+      4: function () { loadExportScreen(plan.id, task); }
     });
   }
 
@@ -1598,10 +2246,11 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   function loadEnvironment(id) {
     fetch("/api/environments/" + id).then(function (r) { return r.json(); }).then(function (env) {
       currentEnvironment = env;
-      document.getElementById("launch-overlay").style.display = "none";
       showEnvironmentScreen();
     });
   }
+
+  showCatalogScreen("park"); // стартовый экран — каталог, а не пустая карта с кнопкой «Загрузить данные»
 })();
 </script>
 </body>
