@@ -142,11 +142,14 @@ def environment_from_row(row: Environment) -> EnvironmentDetail:
 def fleet_to_rows(detail: FleetDetail) -> FleetUpload:
     row = FleetUpload(
         id=as_uuid(detail.id),
+        name=detail.name,
+        location_lat=detail.location_lat,
+        location_lon=detail.location_lon,
+        location_name=detail.location_name,
         uploaded_at=detail.uploaded_at,
         status=detail.status,
         total=detail.total,
         ready_count=detail.ready_count,
-        is_current=True,
     )
     for ordinal, inst in enumerate(detail.instances):
         row.instances.append(
@@ -156,6 +159,8 @@ def fleet_to_rows(detail: FleetDetail) -> FleetUpload:
                 model_key=inst.model_key,
                 model_name=inst.model_name,
                 base_launch_site=inst.base_launch_site,
+                location_lat=inst.location_lat,
+                location_lon=inst.location_lon,
                 status=inst.status,
                 is_valid=inst.valid,
                 error=inst.error,
@@ -175,6 +180,10 @@ def fleet_to_rows(detail: FleetDetail) -> FleetUpload:
 def fleet_from_row(row: FleetUpload) -> FleetDetail:
     return FleetDetail(
         id=str(row.id),
+        name=row.name,
+        location_lat=row.location_lat,
+        location_lon=row.location_lon,
+        location_name=row.location_name,
         uploaded_at=row.uploaded_at,
         status=row.status,
         total=row.total,
@@ -189,6 +198,8 @@ def fleet_from_row(row: FleetUpload) -> FleetDetail:
                 model_key=i.model_key,
                 model_name=i.model_name,
                 base_launch_site=i.base_launch_site,
+                location_lat=i.location_lat,
+                location_lon=i.location_lon,
                 status=i.status,
                 valid=i.is_valid,
                 error=i.error,

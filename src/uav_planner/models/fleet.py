@@ -1,10 +1,14 @@
-"""ORM-модели модуля «Парк БВС» (ПБС.ФТ.2, ФТ.4, ФТ.11).
+"""ORM-модели модуля «Парк БВС» (ПБС.ФТ.2, ФТ.4).
 
-Прежняя реализация держала один парк в глобальной переменной процесса. В БД
-это «текущая загрузка»: частичный уникальный индекс по ``is_current``
-гарантирует, что текущей одновременно может быть только одна. История загрузок
-при этом сохраняется — она понадобится плану, чтобы зафиксировать, против
-какого состава парка он был рассчитан.
+Парков несколько, каждый — самостоятельная именованная сущность со своей
+локацией (расширение ПБС.ФТ.11 по запросу пользователя: прежде парк был один
+и загрузка заменяла его целиком). Поэтому здесь нет ни признака «текущий», ни
+уникального индекса по нему: задача ссылается на конкретный парк по
+``tasks.fleet_id``, а не на глобально выбранный.
+
+Локация парка (``location_lat``/``location_lon``) обязательна и вычисляется
+сервисом из координат экземпляров при загрузке, а не вводится руками; поэтому
+она NOT NULL, а загрузка файла без единой координаты отвергается.
 
 Уникальность инвентарного номера намеренно НЕ вынесена в ограничение БД:
 сервис сохраняет строки с дублями и помечает их невалидными (ПБС.ФТ.2), то
@@ -20,6 +24,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -37,11 +42,14 @@ class FleetUpload(Base):
     __tablename__ = "fleet_uploads"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    location_lat: Mapped[float] = mapped_column(Float, nullable=False)
+    location_lon: Mapped[float] = mapped_column(Float, nullable=False)
+    location_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     ready_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     instances: Mapped[list["FleetInstance"]] = relationship(
         back_populates="upload",
@@ -58,14 +66,6 @@ class FleetUpload(Base):
 
     __table_args__ = (
         CheckConstraint("status IN ('Корректна', 'Содержит ошибки')", name="status_values"),
-        # Текущей может быть только одна загрузка — это и есть бывший синглтон,
-        # но проверяемый базой, а не соглашением в коде.
-        Index(
-            "uq_fleet_uploads_is_current",
-            "is_current",
-            unique=True,
-            postgresql_where="is_current",
-        ),
     )
 
 
@@ -81,6 +81,11 @@ class FleetInstance(Base):
     model_key: Mapped[str] = mapped_column(Text, nullable=False, default="")
     model_name: Mapped[str] = mapped_column(Text, nullable=False, default="")
     base_launch_site: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Фактические координаты экземпляра: разные борта одного парка могут стоять
+    # на разных площадках. Необязательны — из них выводится точка взлёта, а при
+    # их отсутствии план берёт ближайшую ВПП обстановки.
+    location_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    location_lon: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     is_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

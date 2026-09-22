@@ -48,15 +48,19 @@ def _upload_environment(client, no_fly=False):
     return resp.json()["id"]
 
 
-def _upload_fleet(client, inventory_numbers=("gemini-0",)):
+def _upload_fleet(client, inventory_numbers=("gemini-0",), name="Парк"):
     records = [
-        {"inventory_number": number, "model": "geoscan-gemini", "status": "Готов"}
+        {"inventory_number": number, "model": "geoscan-gemini", "status": "Готов",
+         "location_lat": 55.705, "location_lon": 37.56}
         for number in inventory_numbers
     ]
     data = json.dumps(records).encode("utf-8")
-    assert client.post(
-        "/api/fleet", files={"file": ("fleet.json", io.BytesIO(data), "application/json")}
-    ).status_code == 200
+    resp = client.post(
+        "/api/fleets", data={"name": name},
+        files={"file": ("fleet.json", io.BytesIO(data), "application/json")},
+    )
+    assert resp.status_code == 200
+    return resp.json()["id"]
 
 
 def _create_task(client, env_id):

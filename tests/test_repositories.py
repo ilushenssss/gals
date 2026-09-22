@@ -373,9 +373,13 @@ def test_attempt_counter_is_keyed_by_task_version(db):
 # --- парк БВС ------------------------------------------------------------------
 
 
-def _fleet(fleet_id=FLEET_ID, number="GEM-01"):
+def _fleet(fleet_id=FLEET_ID, number="GEM-01", name="Парк Северный"):
     return FleetDetail(
         id=fleet_id,
+        name=name,
+        location_lat=55.75,
+        location_lon=37.60,
+        location_name="Москва",
         uploaded_at=NOW,
         status="Корректна",
         total=1,
@@ -387,6 +391,8 @@ def _fleet(fleet_id=FLEET_ID, number="GEM-01"):
                 model_key="geoscan-gemini",
                 model_name="Геоскан Gemini",
                 base_launch_site="ВПП Северная",
+                location_lat=55.75,
+                location_lon=37.60,
                 status="Готов",
                 valid=True,
                 error=None,
@@ -395,16 +401,30 @@ def _fleet(fleet_id=FLEET_ID, number="GEM-01"):
     )
 
 
-def test_reupload_replaces_current_fleet(db):
-    """ПБС.ФТ.11: текущая загрузка одна; прежняя остается в истории."""
-    repositories.fleet.set_current(_fleet(FLEET_ID, "GEM-01"))
-    repositories.fleet.set_current(_fleet(FLEET_ID_2, "GEM-02"))
+def test_second_fleet_does_not_replace_the_first(db):
+    """Парков несколько: вторая загрузка не отменяет первую (расширение
+    ПБС.ФТ.11 — задача ссылается на конкретный парк, «текущего» больше нет)."""
+    repositories.fleet.add(_fleet(FLEET_ID, "GEM-01", name="Первый"))
+    repositories.fleet.add(_fleet(FLEET_ID_2, "GEM-02", name="Второй"))
     reload(db)
 
-    current = repositories.fleet.get_current()
-    assert current.id == FLEET_ID_2
-    assert [i.inventory_number for i in current.instances] == ["GEM-02"]
+    first = repositories.fleet.get(FLEET_ID)
+    second = repositories.fleet.get(FLEET_ID_2)
+    assert [i.inventory_number for i in first.instances] == ["GEM-01"]
+    assert [i.inventory_number for i in second.instances] == ["GEM-02"]
+    assert {f.id for f in repositories.fleet.list_all()} == {FLEET_ID, FLEET_ID_2}
 
 
-def test_fleet_is_empty_before_first_upload(db):
-    assert repositories.fleet.get_current() is None
+def test_fleet_location_survives_the_round_trip(db):
+    repositories.fleet.add(_fleet())
+    reload(db)
+
+    fleet = repositories.fleet.get(FLEET_ID)
+    assert (fleet.location_lat, fleet.location_lon) == (55.75, 37.60)
+    assert fleet.location_name == "Москва"
+    assert (fleet.instances[0].location_lat, fleet.instances[0].location_lon) == (55.75, 37.60)
+
+
+def test_unknown_fleet_is_none(db):
+    assert repositories.fleet.get(FLEET_ID) is None
+    assert repositories.fleet.list_all() == []

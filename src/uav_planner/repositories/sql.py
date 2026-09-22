@@ -111,28 +111,32 @@ class TaskRepository:
 
 
 class FleetRepository:
-    """ПБС.ФТ.11: текущая загрузка одна, повторная заменяет предыдущую.
+    """Парков много, каждый живёт сам по себе.
 
-    Прежняя загрузка не удаляется, а теряет признак ``is_current`` — история
-    нужна, чтобы план мог сослаться на состав парка, по которому его считали.
+    Прежде загрузка была одна и заменяла предыдущую (``is_current``);
+    расширение по запросу пользователя сделало парк именованной сущностью, на
+    которую задача ссылается явно, поэтому «текущего» парка больше нет и
+    ничего не перезаписывается.
     """
 
-    def set_current(self, detail: FleetDetail) -> FleetDetail:
+    def add(self, detail: FleetDetail) -> FleetDetail:
         session = current_session()
-        for previous in session.scalars(
-            select(FleetUpload).where(FleetUpload.is_current.is_(True))
-        ).all():
-            previous.is_current = False
-        session.flush()
         session.add(mappers.fleet_to_rows(detail))
         session.flush()
         return detail
 
-    def get_current(self) -> FleetDetail | None:
-        row = current_session().scalars(
-            select(FleetUpload).where(FleetUpload.is_current.is_(True))
-        ).first()
+    def get(self, fleet_id: str) -> FleetDetail | None:
+        key = _uuid_or_none(fleet_id)
+        if key is None:
+            return None
+        row = current_session().get(FleetUpload, key)
         return None if row is None else mappers.fleet_from_row(row)
+
+    def list_all(self) -> list[FleetDetail]:
+        rows = current_session().scalars(
+            select(FleetUpload).order_by(FleetUpload.uploaded_at.desc())
+        ).all()
+        return [mappers.fleet_from_row(r) for r in rows]
 
 
 class PlanRepository:

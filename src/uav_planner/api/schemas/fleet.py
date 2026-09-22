@@ -1,7 +1,9 @@
 """Pydantic-схемы модуля «Парк БВС» — см. docs/trebovania/Парк_БВС.md.
 
-Парк — один текущий загруженный список экземпляров БВС (не история версий,
-как обстановки): повторная загрузка полностью заменяет предыдущий список.
+Парков несколько, каждый — именованный список экземпляров БВС со своей
+локацией (расширение ПБС.ФТ.11 по запросу пользователя: прежде парк был один
+и повторная загрузка заменяла его целиком). Задача ссылается на конкретный
+парк по ``TaskDetail.fleet_id``.
 """
 
 from __future__ import annotations
@@ -24,6 +26,11 @@ class FleetInstance(BaseModel):
     model_key: str
     model_name: str
     base_launch_site: Optional[str] = None
+    # Фактические координаты экземпляра (WGS-84): борта одного парка могут
+    # стоять на разных площадках. Необязательны — если их нет, план берёт
+    # ближайшую ВПП обстановки.
+    location_lat: Optional[float] = None
+    location_lon: Optional[float] = None
     status: str
     valid: bool
     error: Optional[str] = None
@@ -31,6 +38,13 @@ class FleetInstance(BaseModel):
 
 class FleetSummary(BaseModel):
     id: str
+    name: str
+    # Локация парка в целом — не вводится руками, а выводится из координат
+    # экземпляров при загрузке (см. fleet_service._derive_fleet_location),
+    # поэтому обязательна.
+    location_lat: float
+    location_lon: float
+    location_name: Optional[str] = None  # человекочитаемая подпись, напр. «Екатеринбург»
     uploaded_at: datetime
     status: Status
     total: int

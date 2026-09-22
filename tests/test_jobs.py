@@ -52,12 +52,19 @@ def _upload_environment(client, no_fly=False):
     return resp.json()["id"]
 
 
-def _upload_fleet(client, n=1, model="geoscan-gemini"):
-    records = [{"inventory_number": f"{model}-{i}", "model": model, "status": "Готов"} for i in range(n)]
+def _upload_fleet(client, n=1, model="geoscan-gemini", name="Парк"):
+    records = [
+        {"inventory_number": f"{model}-{i}", "model": model, "status": "Готов",
+         "location_lat": 55.705, "location_lon": 37.56}
+        for i in range(n)
+    ]
     data = json.dumps(records).encode("utf-8")
-    assert client.post(
-        "/api/fleet", files={"file": ("fleet.json", io.BytesIO(data), "application/json")}
-    ).status_code == 200
+    resp = client.post(
+        "/api/fleets", data={"name": name},
+        files={"file": ("fleet.json", io.BytesIO(data), "application/json")},
+    )
+    assert resp.status_code == 200
+    return resp.json()["id"]
 
 
 def _create_task(client, env_id, **overrides):
