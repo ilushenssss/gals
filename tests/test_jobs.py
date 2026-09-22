@@ -281,27 +281,85 @@ def test_cancel_marks_queued_job_cancelled(client, db):
     assert cancelled["cancel_requested"] is True
 
 
-# --- прерывание перезапуском ------------------------------------------------
+# --- прерывание перезапуском (janitor) --------------------------------------
 
 
-def test_running_job_without_heartbeat_is_reported_as_interrupted(client, db):
+def _pretend_running(db, job_id: str, heartbeat_age_s: float | None) -> None:
+    """Привести строку работы в состояние «воркер взял и молчит».
+
+    ``heartbeat_age_s=None`` — heartbeat'а нет вовсе (воркер умер сразу после
+    взятия работы), число — сколько секунд назад он был.
+    """
+    heartbeat = (
+        None if heartbeat_age_s is None
+        else datetime.now(timezone.utc) - timedelta(seconds=heartbeat_age_s)
+    )
+    db.execute(
+        update(PlanJob).where(PlanJob.id == uuid.UUID(job_id)).values(
+            status="Выполняется", finished_at=None, heartbeat_at=heartbeat,
+        )
+    )
+
+
+def test_janitor_marks_a_job_without_heartbeat_as_interrupted(client, db):
     """Рестарт контейнера не должен оставлять вечное «Выполняется» (и не 404)."""
+    from uav_planner.jobs.tasks import sweep_stale_jobs
+    from uav_planner.services import job_service
+
+    task_id = _ready_task(client)
+    job = job_service.submit("plan", task_id)[0]
+    _pretend_running(db, job.id, heartbeat_age_s=3600)
+
+    assert sweep_stale_jobs() == 1
+
+    polled = client.get(f"/api/plan-jobs/{job.id}").json()
+    assert polled["status"] == "Ошибка"
+    assert polled["error_code"] == "interrupted"
+    assert "перезапуск" in polled["error"]
+
+
+def test_janitor_ignores_a_job_with_a_fresh_heartbeat(client, db):
+    """Идущий расчет не должен добиваться уборкой — он жив и пишет прогресс."""
+    from uav_planner.jobs.tasks import sweep_stale_jobs
+    from uav_planner.services import job_service
+
+    task_id = _ready_task(client)
+    job = job_service.submit("plan", task_id)[0]
+    _pretend_running(db, job.id, heartbeat_age_s=1)
+
+    assert sweep_stale_jobs() == 0
+    assert client.get(f"/api/plan-jobs/{job.id}").json()["status"] == "Выполняется"
+
+
+def test_janitor_leaves_queued_jobs_alone(client, db):
+    """«В очереди» под сторожа не попадает: очередь переживает рестарт Redis,
+    и долгое ожидание в ней — норма, а не смерть воркера."""
+    from uav_planner.jobs.tasks import sweep_stale_jobs
     from uav_planner.services import job_service
 
     task_id = _ready_task(client)
     job = job_service.submit("plan", task_id)[0]
     db.execute(
         update(PlanJob).where(PlanJob.id == uuid.UUID(job.id)).values(
-            status="Выполняется",
-            finished_at=None,
-            heartbeat_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            status="В очереди", finished_at=None, heartbeat_at=None,
         )
     )
 
-    polled = client.get(f"/api/plan-jobs/{job.id}").json()
-    assert polled["status"] == "Ошибка"
-    assert polled["error_code"] == "interrupted"
-    assert "перезапуск" in polled["error"]
+    assert sweep_stale_jobs() == 0
+    assert client.get(f"/api/plan-jobs/{job.id}").json()["status"] == "В очереди"
+
+
+def test_reading_a_stale_job_does_not_fix_it_by_itself(client, db):
+    """Сторож переехал из пути чтения в janitor: опрос статуса больше ничего
+    не чинит — иначе исход работы зависел бы от того, заглянет ли кто-нибудь."""
+    from uav_planner.services import job_service
+
+    task_id = _ready_task(client)
+    job = job_service.submit("plan", task_id)[0]
+    _pretend_running(db, job.id, heartbeat_age_s=3600)
+
+    assert client.get(f"/api/plan-jobs/{job.id}").json()["status"] == "Выполняется"
+    assert client.get(f"/api/plan-jobs?task_id={task_id}").json()[0]["status"] == "Выполняется"
 
 
 # --- прогресс ---------------------------------------------------------------

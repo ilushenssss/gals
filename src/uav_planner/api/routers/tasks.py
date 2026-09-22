@@ -10,6 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from uav_planner.api.deps import DEFAULT_USER, current_user
+from uav_planner.domain.errors import ValidationError
 from uav_planner.services import task_service
 from uav_planner.api.schemas.task import TaskDetail, TaskSummary
 from uav_planner.services.task_service import TaskConflictError, TaskNotEditableError, TaskValidationError
@@ -22,13 +23,26 @@ def _parse_time(value: str | None) -> time | None:
 
 
 async def _read_area_geojson(area_file: UploadFile) -> dict:
+    """Голая геометрия из файла области облета: JSON и снятие обертки.
+
+    Ошибку формата отдаем тем же телом, что и остальные проблемы области
+    (список ``{field, message}``): для фронтенда это одна панель, и разбирать
+    два разных вида 400 на одном поле ему не нужно.
+    """
     raw = await area_file.read()
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail=f"файл области облета не является корректным JSON: {exc}") from exc
-    # Допускаем как Feature, так и «голую» геометрию.
-    return data.get("geometry", data) if data.get("type") == "Feature" else data
+        raise HTTPException(
+            status_code=400,
+            detail=[{"field": "area", "message": f"файл области облета не является корректным JSON: {exc}"}],
+        ) from exc
+    try:
+        return task_service.unwrap_area_geojson(data)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400, detail=[{"field": "area", "message": str(exc)}]
+        ) from exc
 
 
 @router.post("/tasks", response_model=TaskSummary)

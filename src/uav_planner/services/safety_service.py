@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -19,6 +20,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from uav_planner import repositories
+from uav_planner.config import get_settings
 from uav_planner.domain.errors import GalsError
 from uav_planner.geometry import (
     AllowedZone,
@@ -30,6 +32,7 @@ from uav_planner.geometry import (
     compute_working_area,
 )
 from uav_planner.jobs.progress import ProgressReporter
+from uav_planner.logging_setup import log_context
 from uav_planner.safety import (
     CheckResult,
     SortieTrack,
@@ -48,7 +51,7 @@ from . import task_service
 from uav_planner.api.schemas.plan import PlanDetail
 from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport
 
-MAX_AUTO_RECALC = 3
+log = logging.getLogger(__name__)
 
 _LABELS = {
     "geozones": "Геозоны",
@@ -237,6 +240,15 @@ def _store_report(original_plan_id: str, plan: PlanDetail, task, checks: list[Sa
     # известен, — независимо от того, есть нарушения или нет. Подтверждение
     # блокирует не статус плана, а статус самого отчета (ЭКС.ФТ.2).
     repositories.plans.mark_checked(plan.id)
+    with log_context(task_id=task.id, plan_id=plan.id):
+        log.info(
+            "отчет проверки безопасности сохранен",
+            extra={
+                "report_status": report.status,
+                "auto_recalc_count": attempts,
+                "failed_checks": [c.name for c in checks if not c.passed],
+            },
+        )
     return report
 
 
@@ -266,14 +278,19 @@ def check_plan(plan_id: str, progress: ProgressReporter | None = None) -> Safety
     plan, task, env = _load_context(plan_id)
     attempts = repositories.safety.get_attempts(task.id, task.version)
 
+    max_recalc = get_settings().max_auto_recalc
     progress.stage("safety_check")
     checks = _run_checks(env, task, plan)
-    while _status_of(checks) == "Есть нарушения" and attempts < MAX_AUTO_RECALC:
+    while _status_of(checks) == "Есть нарушения" and attempts < max_recalc:
         attempts += 1
         repositories.safety.set_attempts(task.id, task.version, attempts)
+        log.info(
+            "автоматический пересчет после нарушения",
+            extra={"attempt": attempts, "max_attempts": max_recalc, "plan_id": plan.id},
+        )
         progress.publish(
-            f"В процессе автоматического пересчета ({attempts} из {MAX_AUTO_RECALC})",
-            int(40 + 50 * attempts / (MAX_AUTO_RECALC + 1)),
+            f"В процессе автоматического пересчета ({attempts} из {max_recalc})",
+            int(40 + 50 * attempts / (max_recalc + 1)),
         )
         new_summary = plan_service.create_plan(task.id)
         plan = plan_service.get_plan(new_summary.id)

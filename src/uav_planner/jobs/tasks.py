@@ -16,11 +16,20 @@
 * поэтому же исход записывается в ``finally``-подобной ветке уже после выхода
   из ``session_scope``: сначала откатывается или коммитится расчет, потом
   фиксируется его исход.
+
+Здесь же живет janitor (``sweep_stale_jobs``) — периодическая задача, которую
+ставит сервис ``beat``. Она добивает работы, чей воркер погиб вместе с
+контейнером; раньше это делал ленивый сторож в пути чтения.
+
+Идентификаторы работы и задачи кладутся в контекст журнала (``log_context``) до
+первой записи, поэтому все строки одного расчета — включая сделанные сервисами
+и репозиториями — выбираются из общего потока по ``job_id``.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -30,6 +39,7 @@ from sqlalchemy import update
 
 from uav_planner.db.session import session_scope, short_session_scope
 from uav_planner.domain.errors import PlanInfeasibleError
+from uav_planner.logging_setup import log_context
 from uav_planner.models.job import (
     ACTIVE_STATUSES,
     ERROR_CANCELLED,
@@ -45,7 +55,7 @@ from uav_planner.models.job import (
     PlanJob,
 )
 
-from .celery_app import celery_app
+from .celery_app import SWEEP_STALE_JOBS_TASK, celery_app
 from .progress import JobCancelled, ProgressReporter
 
 log = logging.getLogger(__name__)
@@ -98,43 +108,82 @@ def _finish(job_id: str, status: str, **values) -> None:
 
 
 def _run(job_id: str, celery_task_id: str | None, body) -> None:
-    """Общий каркас работы: статусы, лимит времени, отмена, ошибки.
+    """Общий каркас работы: контекст журнала, статусы, лимит, отмена, ошибки.
 
-    ``body(progress)`` обязан вернуть словарь полей результата для строки
-    работы (``result_plan_id`` и/или ``result_report_id``).
+    ``body(progress, fields)`` обязан вернуть словарь полей результата для
+    строки работы (``result_plan_id`` и/или ``result_report_id``); ``fields`` —
+    уже прочитанные идентификаторы работы, чтобы каждая задача не читала их
+    заново.
     """
+    with log_context(job_id=job_id):
+        try:
+            fields = _load_job_fields(job_id)
+        except KeyError as exc:
+            # Строку работы удалили, пока сообщение лежало в очереди.
+            log.warning("строка работы не найдена — выполнять нечего")
+            _finish(job_id, STATUS_FAILED, error_code=ERROR_NOT_FOUND,
+                    error=f"объект не найден: {exc}")
+            return
+
+        with log_context(task_id=fields["task_id"], kind=fields["kind"]):
+            _run_body(job_id, celery_task_id, body, fields)
+
+
+def _run_body(job_id: str, celery_task_id: str | None, body, fields: dict) -> None:
     if not _claim(job_id, celery_task_id):
-        log.info("работа %s снята до старта (отменена или уже обработана)", job_id)
+        log.info("работа снята до старта — отменена или уже обработана")
         _ensure_cancelled(job_id)
         return
 
+    log.info("расчет начат")
+    started = time.monotonic()
     progress = ProgressReporter(job_id)
     try:
         with session_scope():
-            result = body(progress)
+            result = body(progress, fields)
     except JobCancelled:
         # Штатный выход по флагу отмены (ПЛН.ФТ.5), не ошибка.
-        _finish(job_id, STATUS_CANCELLED, progress=0, error_code=ERROR_CANCELLED,
-                error="расчет отменен оператором", stage=None)
+        _outcome(job_id, STATUS_CANCELLED, started, progress=0, error_code=ERROR_CANCELLED,
+                 error="расчет отменен оператором", stage=None)
     except _SOFT_LIMIT:
         # ПЛН.ФТ.3. Лучшее найденное решение сохранить пока нечего: текущий
         # конвейер эвристик не имеет промежуточного допустимого плана — он
         # появится вместе с решателем OR-Tools, который умеет отдавать
         # incumbent по time_limit. Остановка при этом честная и наблюдаемая.
-        _finish(job_id, STATUS_TIMEOUT, error_code=ERROR_TIMEOUT,
-                error="расчет остановлен по лимиту времени; оптимальность не гарантируется")
+        _outcome(job_id, STATUS_TIMEOUT, started, error_code=ERROR_TIMEOUT,
+                 error="расчет остановлен по лимиту времени; оптимальность не гарантируется")
     except PlanInfeasibleError as exc:
         # ПЛН.ФТ.10: задача невыполнима — это результат расчета, а не сбой.
-        _finish(job_id, STATUS_FAILED, error_code=ERROR_INFEASIBLE, error=str(exc))
+        _outcome(job_id, STATUS_FAILED, started, error_code=ERROR_INFEASIBLE, error=str(exc))
     except KeyError as exc:
         # Задачу или план удалили, пока работа стояла в очереди.
-        _finish(job_id, STATUS_FAILED, error_code=ERROR_NOT_FOUND,
-                error=f"объект не найден: {exc}")
+        _outcome(job_id, STATUS_FAILED, started, error_code=ERROR_NOT_FOUND,
+                 error=f"объект не найден: {exc}")
     except Exception as exc:  # noqa: BLE001 — исход обязан попасть в строку работы
-        log.exception("работа %s завершилась ошибкой", job_id)
-        _finish(job_id, STATUS_FAILED, error_code=ERROR_INTERNAL, error=str(exc))
+        log.exception("расчет завершился необработанной ошибкой")
+        _outcome(job_id, STATUS_FAILED, started, error_code=ERROR_INTERNAL, error=str(exc))
     else:
-        _finish(job_id, STATUS_DONE, progress=100, stage="Завершен", **result)
+        _outcome(job_id, STATUS_DONE, started, progress=100, stage="Завершен", **result)
+
+
+def _outcome(job_id: str, status: str, started: float, **values) -> None:
+    """Записать исход работы и одной строкой сказать о нем в журнал.
+
+    Уровень зависит от исхода: «Завершен» и «Отменен» — штатные события,
+    остальное требует внимания. Длительность здесь важнее, чем кажется: по ней
+    видно, приблизился ли расчет к лимиту ПЛН.ФТ.3, до того как в него упрется.
+    """
+    _finish(job_id, status, **values)
+    level = logging.INFO if status in (STATUS_DONE, STATUS_CANCELLED) else logging.WARNING
+    log.log(
+        level,
+        "расчет завершен",
+        extra={
+            "job_status": status,
+            "duration_s": round(time.monotonic() - started, 3),
+            "error_code": values.get("error_code"),
+        },
+    )
 
 
 @celery_app.task(name="gals.run_plan_job", bind=True)
@@ -142,9 +191,8 @@ def run_plan_job(self, job_id: str) -> None:
     """Расчет плана (ПЛН.ФТ.5)."""
     from uav_planner.services import plan_service
 
-    def body(progress: ProgressReporter) -> dict:
-        job = _load_job_fields(job_id)
-        summary = plan_service.create_plan(str(job["task_id"]), progress=progress)
+    def body(progress: ProgressReporter, fields: dict) -> dict:
+        summary = plan_service.create_plan(fields["task_id"], progress=progress)
         return {"result_plan_id": uuid.UUID(summary.id)}
 
     _run(job_id, getattr(self.request, "id", None), body)
@@ -160,9 +208,8 @@ def run_safety_job(self, job_id: str) -> None:
     """
     from uav_planner.services import safety_service
 
-    def body(progress: ProgressReporter) -> dict:
-        job = _load_job_fields(job_id)
-        report = safety_service.check_plan(str(job["plan_id"]), progress=progress)
+    def body(progress: ProgressReporter, fields: dict) -> dict:
+        report = safety_service.check_plan(fields["plan_id"], progress=progress)
         return {
             "result_plan_id": uuid.UUID(report.plan_id),
             "result_report_id": uuid.UUID(report.id),
@@ -215,10 +262,29 @@ def _load_job_fields(job_id: str) -> dict:
 
     Читать их из транзакции расчета нельзя: она открывается позже и живет до
     конца работы, а строку ``plan_jobs`` к этому моменту уже успел изменить
-    ``_mark_started``.
+    ``_claim``.
     """
     with short_session_scope() as session:
         row = session.get(PlanJob, uuid.UUID(job_id))
         if row is None:
             raise KeyError(f"работа {job_id} не найдена")
-        return {"task_id": row.task_id, "plan_id": row.plan_id, "kind": row.kind}
+        return {
+            "task_id": str(row.task_id),
+            "plan_id": str(row.plan_id) if row.plan_id else None,
+            "kind": row.kind,
+        }
+
+
+@celery_app.task(name=SWEEP_STALE_JOBS_TASK)
+def sweep_stale_jobs() -> int:
+    """Janitor: перевести в «Ошибка» работы, чей воркер погиб (ПЛН.ФТ.5).
+
+    Ставится по расписанию сервисом ``beat``, выполняется обычным воркером.
+    Отдельный процесс вместо прежнего ленивого сторожа в пути чтения: исход
+    работы не должен зависеть от того, заглянет ли кто-нибудь в нее, а
+    получасовой расчет оператор вполне может оставить и уйти.
+    """
+    from uav_planner.services import job_service
+
+    with session_scope():
+        return len(job_service.sweep_stale())

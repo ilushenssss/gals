@@ -16,8 +16,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from uav_planner.config import Settings, get_settings
+from uav_planner.logging_setup import configure_logging
 
-from .middleware import DbSessionMiddleware
+from .middleware import DbSessionMiddleware, RequestContextMiddleware
 
 from .routers.environments import router as environments_router
 from .routers.fleet import router as fleet_router
@@ -29,6 +30,7 @@ from .routers.tasks import router as tasks_router
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    configure_logging(settings)
 
     app = FastAPI(title="Галс — планировщик БВС", version="0.1.0")
     app.state.settings = settings
@@ -47,6 +49,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Сессия БД живет ровно один запрос: коммит после успешного ответа,
     # откат при исключении.
     app.add_middleware(DbSessionMiddleware, enabled=settings.database_configured)
+
+    # Добавляется последним и поэтому оказывается самым внешним: идентификатор
+    # запроса должен попасть в контекст раньше всех, чтобы его несли и записи
+    # об открытии сессии, и запись о необработанной ошибке.
+    app.add_middleware(RequestContextMiddleware)
 
     app.include_router(health_router)
     app.include_router(environments_router)

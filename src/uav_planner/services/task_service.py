@@ -8,6 +8,7 @@ import uuid
 from datetime import date, datetime, time, timezone
 from typing import Any
 
+from shapely.errors import ShapelyError
 from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
@@ -67,6 +68,44 @@ def _daylight_warning(area_geom: BaseGeometry, work_date: date, window_start: ti
     return None
 
 
+AREA_FORMAT_HINT = (
+    "область облета должна быть одним полигоном: допустимы GeoJSON-геометрия "
+    "Polygon/MultiPolygon, Feature с такой геометрией или FeatureCollection "
+    "ровно с одним таким Feature"
+)
+
+
+def unwrap_area_geojson(data: Any) -> dict[str, Any]:
+    """Снять обертку Feature/FeatureCollection с файла области облета.
+
+    Сервисы и хранилище работают с голой геометрией: ``plan_service`` и
+    ``safety_service`` зовут ``shape(task.area)``, а в таблице рядом с сырым
+    jsonb лежит индексируемая ``geometry(4326)``. Поэтому обертка снимается
+    один раз, на входе, а не разбирается каждым, кто читает задачу.
+
+    ``FeatureCollection`` принимается потому, что «нарисовал область и
+    сохранил» большинство редакторов (QGIS, geojson.io) отдает именно
+    коллекцией — отказывать ей как непонятному типу значит отказывать самому
+    обычному файлу. Коллекция из нескольких объектов все равно отвергается:
+    область облета по ЗАД.ФТ.4 одна, и молча взять из файла первый попавшийся
+    полигон хуже, чем сказать об этом вслух.
+    """
+    if not isinstance(data, dict):
+        raise ValidationError(AREA_FORMAT_HINT)
+
+    kind = data.get("type")
+    if kind == "FeatureCollection":
+        features = data.get("features") or []
+        if len(features) != 1:
+            raise ValidationError(
+                f"в файле области облета {len(features)} объект(ов) — {AREA_FORMAT_HINT}"
+            )
+        return unwrap_area_geojson(features[0])
+    if kind == "Feature":
+        return unwrap_area_geojson(data.get("geometry"))
+    return data
+
+
 def _validate(
     *,
     environment_id: str,
@@ -117,7 +156,12 @@ def _validate(
         candidate = shape(area_geojson)
         validate_polygon(candidate)
         area_geom = candidate
-    except (GeometryError, ValueError, TypeError, KeyError) as exc:
+    except (GeometryError, ShapelyError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        # Список широкий намеренно: файл области рисует оператор, и shapely на
+        # каждом виде мусора падает по-своему — GeometryTypeError на чужом
+        # "type", KeyError без "coordinates", AttributeError на объекте без
+        # "type" вообще. Любой из них — некорректный ввод (400 по ЗАД.ФТ.5),
+        # а не сбой сервиса, и раньше GeometryTypeError улетал наружу как 500.
         issues.append(TaskValidationIssue(field="area", message=str(exc)))
 
     if area_geom is not None:

@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -44,6 +45,8 @@ from uav_planner import repositories
 from uav_planner.api.schemas.plan import PlanDetail, PlanSortie
 from uav_planner.domain.errors import ValidationError
 from uav_planner.geometry import Projector
+
+log = logging.getLogger(__name__)
 
 KML_NS = "http://www.opengis.net/kml/2.2"
 KML_MEDIA_TYPE = "application/vnd.google-earth.kml+xml"
@@ -421,4 +424,11 @@ def export_plan(
 
     filename = filename_for(plan, uav_id, fmt)
     repositories.plans.record_export(plan.id, uav_id, fmt, filename, user)
+    log.info(
+        "план выгружен",
+        extra={
+            "plan_id": plan.id, "task_id": plan.task_id, "version": plan.version,
+            "format": fmt, "uav_id": uav_id, "bytes": len(content), "user": user,
+        },
+    )
     return content, filename, media_type

@@ -3,6 +3,9 @@
 import io
 import json
 
+import pytest
+
+
 def square_coords(x0, y0, size):
     return [[[x0, y0], [x0 + size, y0], [x0 + size, y0 + size], [x0, y0 + size], [x0, y0]]]
 
@@ -274,3 +277,101 @@ def test_conflict_message_names_the_user_who_edited_first(client):
 
     # Правка второго не применилась.
     assert client.get(f"/api/tasks/{created['id']}").json()["name"] == "Правка Иванова"
+
+
+# --- обертки файла области облета (ЗАД.ФТ.5) ---------------------------------
+#
+# Область оператор рисует в стороннем редакторе, и тот отдает файл в одной из
+# трех форм. Главное здесь — что ни одна кривая форма не дает 500: разбор чужого
+# файла обязан заканчиваться сообщением оператору, а не отказом сервиса.
+
+
+def _raw_area_file(payload):
+    return {
+        "area_file": (
+            "area.geojson",
+            io.BytesIO(json.dumps(payload).encode("utf-8")),
+            "application/json",
+        )
+    }
+
+
+def _polygon(coords):
+    return {"type": "Polygon", "coordinates": coords}
+
+
+def test_create_task_accepts_a_feature_collection_with_one_polygon(client):
+    """QGIS и geojson.io сохраняют нарисованную область именно коллекцией."""
+    env_id = _upload_environment(client)
+    area = _polygon(square_coords(37.2, 55.2, 0.2))
+    payload = {
+        "type": "FeatureCollection",
+        "features": [{"type": "Feature", "properties": {"name": "область"}, "geometry": area}],
+    }
+    resp = client.post("/api/tasks", data=_base_form(env_id), files=_raw_area_file(payload))
+    assert resp.status_code == 200, resp.text
+
+    # Обертка снята на входе: хранится и отдается голая геометрия — ее ждут
+    # расчет и проверка безопасности (обе зовут shape(task.area)).
+    stored = client.get(f"/api/tasks/{resp.json()['id']}").json()["area"]
+    assert stored["type"] == "Polygon"
+
+
+def test_create_task_accepts_a_bare_feature(client):
+    env_id = _upload_environment(client)
+    payload = {
+        "type": "Feature",
+        "properties": {},
+        "geometry": _polygon(square_coords(37.2, 55.2, 0.2)),
+    }
+    resp = client.post("/api/tasks", data=_base_form(env_id), files=_raw_area_file(payload))
+    assert resp.status_code == 200, resp.text
+
+
+def test_feature_collection_with_several_objects_is_rejected_with_400(client):
+    """Область облета по ЗАД.ФТ.4 одна; молча взять из файла первый полигон
+    хуже, чем сказать об этом."""
+    env_id = _upload_environment(client)
+    feature = {
+        "type": "Feature",
+        "properties": {},
+        "geometry": _polygon(square_coords(37.2, 55.2, 0.2)),
+    }
+    payload = {"type": "FeatureCollection", "features": [feature, feature]}
+    resp = client.post("/api/tasks", data=_base_form(env_id), files=_raw_area_file(payload))
+    assert resp.status_code == 400
+    assert resp.json()["detail"][0]["field"] == "area"
+
+
+def test_empty_feature_collection_is_rejected_with_400(client):
+    env_id = _upload_environment(client)
+    payload = {"type": "FeatureCollection", "features": []}
+    resp = client.post("/api/tasks", data=_base_form(env_id), files=_raw_area_file(payload))
+    assert resp.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "GeometryCollection", "geometries": []},  # shapely: GeometryTypeError
+        {"type": "Polygon"},                               # shapely: KeyError
+        {"foo": "bar"},                                    # shapely: AttributeError
+        [1, 2, 3],                                         # вообще не объект
+        "просто строка",
+    ],
+    ids=["unknown-type", "no-coordinates", "no-type", "list", "string"],
+)
+def test_garbage_in_the_area_file_is_a_400_not_a_500(client, payload):
+    """Регрессия: shapely на каждом виде мусора падает своим исключением, и
+    GeometryTypeError раньше улетал из сервиса наружу как 500."""
+    env_id = _upload_environment(client)
+    resp = client.post("/api/tasks", data=_base_form(env_id), files=_raw_area_file(payload))
+    assert resp.status_code == 400, resp.text
+
+
+def test_broken_json_in_the_area_file_is_a_400(client):
+    env_id = _upload_environment(client)
+    files = {"area_file": ("area.geojson", io.BytesIO(b"{ not json"), "application/json")}
+    resp = client.post("/api/tasks", data=_base_form(env_id), files=files)
+    assert resp.status_code == 400
+    assert resp.json()["detail"][0]["field"] == "area"

@@ -313,10 +313,11 @@ class JobRepository:
       активна (двойной клик) или ключ идемпотентности уже встречался (ретрай
       сети). Пустой результат — не ошибка: вызывающий отдает существующую
       работу;
-    * ``mark_interrupted_if_stale`` — ленивый сторож вместо отдельного
-      процесса: работа, чей воркер погиб вместе с контейнером, не должна
-      висеть «Выполняется» вечно и не должна отдаваться как 404 (план
-      обертки, требование к ``GET /api/plan-jobs?task_id=``).
+    * ``sweep_stale`` — одним запросом добивает все работы, чей воркер погиб
+      вместе с контейнером: такая работа не должна висеть «Выполняется» вечно
+      и не должна отдаваться как 404 (план обертки, требование к
+      ``GET /api/plan-jobs?task_id=``). Зовет его периодическая задача
+      janitor'а, поэтому запрос один на всю таблицу, а не на строку.
     """
 
     def create(
@@ -430,20 +431,19 @@ class JobRepository:
             .values(status=status, finished_at=datetime.now(timezone.utc), **values)
         )
 
-    def mark_interrupted_if_stale(self, job_id: str, stale_after_s: float) -> bool:
-        """Работа «Выполняется» без свежего heartbeat — воркер погиб.
+    def sweep_stale(self, stale_after_s: float) -> list[str]:
+        """Перевести в «Ошибка» все работы «Выполняется» без свежего heartbeat.
 
         Статус «В очереди» сюда не попадает намеренно: очередь переживает
-        рестарт (Redis с appendonly), и долгое ожидание в ней — норма.
+        рестарт (Redis с appendonly), и долгое ожидание в ней — норма. Возврат —
+        идентификаторы добитых работ, они нужны журналу: молчаливая уборка не
+        дает потом ответить, сколько расчетов потерял очередной перезапуск.
         """
-        key = _uuid_or_none(job_id)
-        if key is None:
-            return False
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_s)
-        result = current_session().execute(
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=stale_after_s)
+        rows = current_session().execute(
             update(PlanJob)
             .where(
-                PlanJob.id == key,
                 PlanJob.status == STATUS_RUNNING,
                 or_(PlanJob.heartbeat_at.is_(None), PlanJob.heartbeat_at < cutoff),
             )
@@ -451,10 +451,11 @@ class JobRepository:
                 status=STATUS_FAILED,
                 error_code=ERROR_INTERRUPTED,
                 error="расчет прерван перезапуском сервиса",
-                finished_at=datetime.now(timezone.utc),
+                finished_at=now,
             )
-        )
-        return result.rowcount > 0
+            .returning(PlanJob.id)
+        ).scalars().all()
+        return [str(row) for row in rows]
 
 
 environments = EnvironmentRepository()

@@ -21,7 +21,6 @@ services:
       - --reload-dir
       - /app/src
     environment:
-      GALS_DEBUG: "true"
       GALS_ENV: dev
     volumes:
       - ./src:/app/src
@@ -38,7 +37,12 @@ services:
   # обычным docker compose restart worker, без пересборки образа.
   worker:
     environment:
-      GALS_DEBUG: "true"
+      GALS_ENV: dev
+    volumes:
+      - ./src:/app/src
+
+  beat:
+    environment:
       GALS_ENV: dev
     volumes:
       - ./src:/app/src

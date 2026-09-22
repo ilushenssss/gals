@@ -10,12 +10,17 @@
 ПЛН.ФТ.3 (лимит 1800 с), БЕЗ.ФТ.3 (не более трех автопересчетов),
 Математическая_модель.md (η = 0,20, допуск покрытия, D_min, ε_t, ε_h, шаг
 дискретизации траектории).
+
+Часть параметров модели пока объявлена, но не подключена к коду — у чистых
+математических модулей свои значения по умолчанию, и связать их можно будет
+только вместе с соответствующим расширением расчета. Такие настройки вынесены
+в отдельную секцию и помечены явно: настройка, которая ничего не меняет, но
+выглядит рабочей, хуже ее отсутствия.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,8 +36,10 @@ class Settings(BaseSettings):
 
     # --- окружение ---------------------------------------------------------
     env: Literal["dev", "test", "prod"] = "dev"
-    debug: bool = False
     log_level: str = "INFO"
+    # Формат журнала: "json" — по строке JSON на запись (прод, машинный разбор),
+    # "text" — читаемая строка (разработка). "auto" выбирает по env.
+    log_format: Literal["auto", "json", "text"] = "auto"
 
     # --- хранилище ---------------------------------------------------------
     # Пустая строка = БД не сконфигурирована; на шаге 1 сервис еще работает
@@ -55,7 +62,6 @@ class Settings(BaseSettings):
     # Фронтенд и API ходят через один origin (nginx в контейнере web либо
     # dev-proxy Vite), поэтому по умолчанию CORS не нужен и список пуст.
     cors_origins: list[str] = []
-    max_upload_bytes: int = 50 * 1024 * 1024
 
     # --- расчет ------------------------------------------------------------
     # Сколько секунд POST /api/plans ждет результата, прежде чем отдать 202:
@@ -65,21 +71,32 @@ class Settings(BaseSettings):
     plan_hard_time_limit_s: int = 1980
     max_auto_recalc: int = 3  # БЕЗ.ФТ.3
     cancel_grace_seconds: int = 30
-    job_heartbeat_seconds: int = 15
+    # Работа «Выполняется», у которой heartbeat старше этого порога, считается
+    # осиротевшей: ее воркер погиб вместе с контейнером. Добивает такие работы
+    # периодическая задача janitor'а (сервис `beat`), а не чтение.
     job_stale_after_seconds: int = 120
+    job_sweep_interval_seconds: int = 30
 
     # --- параметры математической модели ------------------------------------
     energy_reserve: float = 0.20  # η, БЕЗ: остаток энергии не ниже 20 %
     maneuver_margin: float = 0.0  # m_ман
+
+    # --- объявлено требованиями, но еще не подключено -------------------------
+    # Значения ниже сейчас ни на что не влияют: проверки безопасности берут
+    # собственные значения по умолчанию из uav_planner.safety.checks, а лимит
+    # на размер загружаемого файла не проверяется нигде. Оставлены, чтобы имя
+    # параметра из требований уже существовало, но подключать их надо вместе с
+    # тем кодом, который начнет их читать.
     coverage_tolerance: float = 0.01  # допуск непокрытой площади
     separation_distance_m: float = 100.0  # D_min
     separation_time_s: float = 30.0  # ε_t
     separation_height_m: float = 20.0  # ε_h
     discretize_step_s: float = 5.0  # шаг дискретизации траектории для проверок
+    max_upload_bytes: int = 50 * 1024 * 1024
 
-    # --- экспорт -----------------------------------------------------------
-    export_dir: Path = Path("/data/exports")
-    export_retention_days: int = 30
+    @property
+    def log_as_json(self) -> bool:
+        return self.log_format == "json" or (self.log_format == "auto" and self.env != "dev")
 
     @property
     def broker_url(self) -> str:

@@ -7,7 +7,7 @@
 
 См. docs/trebovania/Планирование.md (ПЛН.ФТ.1-10) и docs/trebovania/
 Математическая_модель.md. Известные упрощения первой версии — см.
-``main/README.md``, раздел про модуль «Планирование»:
+``README.md``, раздел про модуль «Планирование»:
   - одна модель БВС на план — группа готовых экземпляров с совместимой
     нагрузкой, в которой больше всего экземпляров (смешанный парк в одной
     задаче — будущая версия);
@@ -18,15 +18,17 @@
     (граф видимости — модуль ``visibility``, пока не реализован);
   - площадка старта/посадки — первая ВПП обстановки, иначе центроид рабочей
     области;
-  - расчет синхронный (весь пайплайн выполняется в теле HTTP-запроса) — для
-    сцен тестового масштаба (T1-T9) счет идет доли секунды; фоновый расчет с
-    30-минутным лимитом (сцены T11) — будущая версия;
-  - результат не проходит независимую проверку безопасности — это отдельный
-    модуль «Проверка безопасности», еще не реализован.
+  - расчет не сохраняет промежуточное допустимое решение, поэтому остановка по
+    лимиту времени (ПЛН.ФТ.3) фиксируется статусом, но отдать «лучшее из
+    найденного» нечего — это появится вместе с решателем OR-Tools.
+
+Расчет выполняется фоновой работой (``jobs/tasks.py``), а независимая проверка
+результата — отдельный модуль «Проверка безопасности».
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, time, timezone
 from typing import Any
@@ -52,6 +54,7 @@ from uav_planner.geometry import (
     validate_polygon,
 )
 from uav_planner.jobs.progress import SCHEDULE_SPAN, TRACKS_SPAN, ProgressReporter
+from uav_planner.logging_setup import log_context
 from uav_planner.routing import Track, Vehicle, greedy_assign_and_split
 from uav_planner.schedule import ScheduleError, assign_timestamps
 
@@ -71,6 +74,8 @@ SORTIE_PENALTY_S = 60.0  # λ в J2 — вес одного вылета (изн
 MIN_EFFECTIVE_SPEED_MPS = 1.0
 
 _SUMMARY_ONLY_EXCLUDE = {"sorties"}
+
+log = logging.getLogger(__name__)
 
 
 class PlanInfeasibleError(_DomainPlanInfeasibleError):
@@ -359,6 +364,14 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
     )
     repositories.plans.add(detail)
     task_service.mark_calculated(task.id)
+    with log_context(task_id=task.id, plan_id=plan_id):
+        log.info(
+            "план рассчитан",
+            extra={
+                "version": version, "uav_model": model_key, "sortie_count": len(plan_sorties),
+                "j1_s": round(j1_s, 1), "j2_s": round(j2_s, 1), "warnings": len(warnings),
+            },
+        )
     return _to_summary(detail)
 
 
@@ -407,5 +420,13 @@ def confirm_plan(plan_id: str, user: str) -> PlanSummary:
     confirmed = repositories.plans.confirm(plan_id, user)
     if confirmed is None:
         actual = repositories.plans.get(plan_id)
+        log.warning(
+            "подтверждение отклонено — статус плана изменился",
+            extra={"plan_id": plan_id, "plan_status": actual.status, "user": user},
+        )
         raise PlanConfirmConflictError(actual)
+    log.info(
+        "статус плана изменен",
+        extra={"plan_id": plan_id, "plan_status": confirmed.status, "user": user},
+    )
     return _to_summary(confirmed)

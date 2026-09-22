@@ -36,7 +36,7 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 COPY src ./src
 
-RUN mkdir -p /data/exports && chown -R appuser:appuser /app /data
+RUN chown -R appuser:appuser /app
 
 USER appuser
 

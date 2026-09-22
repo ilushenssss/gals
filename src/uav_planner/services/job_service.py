@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 
@@ -33,8 +34,8 @@ from uav_planner.api.schemas.job import JobInfo
 from uav_planner.config import get_settings
 from uav_planner.db.session import current_session, short_session_scope
 from uav_planner.domain.errors import GalsError
+from uav_planner.logging_setup import log_context
 from uav_planner.models.job import (
-    ACTIVE_STATUSES,
     ERROR_CANCELLED,
     ERROR_INFEASIBLE,
     ERROR_NOT_FOUND,
@@ -43,6 +44,8 @@ from uav_planner.models.job import (
 )
 
 POLL_INTERVAL_S = 0.05
+
+log = logging.getLogger(__name__)
 
 
 class JobConflictError(GalsError):
@@ -105,32 +108,41 @@ def submit(
         raise JobConflictError("не удалось поставить расчет в очередь — повторите попытку")
 
     _enqueue(job)
+    with log_context(job_id=job.id, task_id=task_id):
+        log.info("работа поставлена в очередь", extra={"kind": kind, "plan_id": plan_id})
     return job, True
 
 
 def get_job(job_id: str) -> JobInfo:
-    """Строка работы с ленивой проверкой на «воркер погиб».
+    """Строка работы как есть — чтение ничего не чинит.
 
-    Работа, чей контейнер перезапустили, обязана отдаваться со статусом
-    «Ошибка» и внятным текстом, а не висеть «Выполняется» вечно и не отвечать
-    404 — иначе индикатор прогресса во вкладке крутится бесконечно.
+    Работу, чей контейнер перезапустили, переводит в «Ошибка» janitor
+    (``sweep_stale`` ниже, по расписанию ``beat``), а не путь чтения. Раньше
+    сторож был ленивым и жил здесь; это значило, что запись о смерти воркера
+    появляется, только если кто-то заглянет, а два одновременных запроса пишут
+    ее наперегонки. Цена переноса — работа считается осиротевшей не мгновенно,
+    а с задержкой до одного тика janitor'а.
     """
-    stale_after = get_settings().job_stale_after_seconds
-    if repositories.jobs.mark_interrupted_if_stale(job_id, stale_after):
-        current_session().commit()
     return repositories.jobs.get(job_id)
 
 
 def list_jobs(task_id: str) -> list[JobInfo]:
     """Все работы задачи, свежие первыми — переподключение индикатора после F5."""
-    stale_after = get_settings().job_stale_after_seconds
-    changed = False
-    for job in repositories.jobs.list_by_task_newest_first(task_id):
-        if job.status in ACTIVE_STATUSES:
-            changed |= repositories.jobs.mark_interrupted_if_stale(job.id, stale_after)
-    if changed:
-        current_session().commit()
     return repositories.jobs.list_by_task_newest_first(task_id)
+
+
+def sweep_stale() -> list[str]:
+    """Janitor: добить работы, чей воркер погиб (ПЛН.ФТ.5, наблюдаемый исход).
+
+    Вызывается периодической задачей ``gals.sweep_stale_jobs``. Отдельная
+    строка журнала на каждую добитую работу — по ней потом видно, сколько
+    расчетов унес перезапуск и чьи именно это были задачи.
+    """
+    job_ids = repositories.jobs.sweep_stale(get_settings().job_stale_after_seconds)
+    for job_id in job_ids:
+        with log_context(job_id=job_id):
+            log.warning("работа прервана перезапуском сервиса — heartbeat устарел")
+    return job_ids
 
 
 def cancel(job_id: str) -> JobInfo:
@@ -149,6 +161,7 @@ def cancel(job_id: str) -> JobInfo:
     if job.is_finished:
         return job
 
+    log.info("запрошена отмена расчета", extra={"job_id": job_id, "job_status": job.status})
     repositories.jobs.request_cancel(job_id)
     celery_task_id = repositories.jobs.get_celery_task_id(job_id)
     current_session().commit()
