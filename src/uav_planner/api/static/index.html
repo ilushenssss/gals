@@ -190,6 +190,10 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 .detail-actions{display:flex;gap:10px;margin-top:4px}
 .detail-actions .btn{flex:1}
 
+/* ---- фоновый расчет (ПЛН.ФТ.5): прогресс и отмена ---- */
+.job-progress-bar{height:8px;border-radius:4px;background:var(--rule);overflow:hidden;margin:10px 0}
+.job-progress-fill{height:100%;background:var(--area);transition:width .3s ease}
+
 /* ---- модуль «Проверка безопасности»: экран результатов (БЕЗ.ФТ.4-6) ---- */
 .safety-checks{list-style:none;margin:0 0 6px;padding:0;display:flex;flex-direction:column;gap:6px}
 .safety-check{border:1px solid var(--rule);border-radius:8px;padding:8px 10px;background:var(--card-bg)}
@@ -1639,6 +1643,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
         });
       });
     }
+    reconnectActiveJob(task);
   }
 
   function showTaskDetailScreen(task) {
@@ -1690,19 +1695,125 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     return '<span class="status-badge ' + cls + '">' + escapeHtml(status) + suffix + "</span>";
   }
 
+  // ---------- Фоновый расчет (ПЛН.ФТ.5): прогресс и отмена ----------
+  // POST /api/plans и /api/safety-checks раньше всегда отвечали синхронно.
+  // Теперь эндпоинт ждет settings.plan_sync_wait_seconds и либо отдает тот же
+  // прежний 200 с готовым результатом (быстрые сцены укладываются в это окно
+  // и весь код ниже для них не задействуется), либо 202 с объектом работы —
+  // тогда сами ждем, опрашивая GET /api/plan-jobs/{id}, и даем отменить.
+  var JOB_POLL_INTERVAL_MS = 1500;
+
+  function jobIsFinished(job) {
+    // JobInfo.is_finished в бэкенде — Python @property, в JSON не попадает
+    // (см. api/schemas/job.py) — логика повторена здесь.
+    return job.finished_at != null || (job.status !== "В очереди" && job.status !== "Выполняется");
+  }
+
+  function jobFailureMessage(job) {
+    if (job.status === "Завершен") return null;
+    return job.error || "расчет завершился со статусом «" + job.status + "»";
+  }
+
+  function pollJob(jobId, onTick) {
+    return new Promise(function (resolve, reject) {
+      function tick() {
+        fetch("/api/plan-jobs/" + jobId).then(function (r) {
+          if (!r.ok) throw new Error("не удалось получить статус расчета");
+          return r.json();
+        }).then(function (job) {
+          onTick(job);
+          if (jobIsFinished(job)) { resolve(job); } else { setTimeout(tick, JOB_POLL_INTERVAL_MS); }
+        }).catch(reject);
+      }
+      tick();
+    });
+  }
+
+  function renderJobProgressHtml(job) {
+    var pct = Math.max(0, Math.min(100, job.progress || 0));
+    var html = '<div class="job-progress">';
+    html += '<p class="sb-title">' + escapeHtml(job.status) + "</p>";
+    html += '<p class="sb-sub">' + (job.stage ? escapeHtml(job.stage) : "Расчет выполняется в фоне") + "</p>";
+    html += '<div class="job-progress-bar"><div class="job-progress-fill" style="width:' + pct + '%"></div></div>';
+    html += '<button class="btn" id="btn-cancel-job" style="width:100%">Отменить</button>';
+    html += "</div>";
+    return html;
+  }
+
+  function runJobInSidebar(jobId, onFinished) {
+    var el = document.getElementById("sidebar");
+    function render(job) {
+      el.innerHTML = renderJobProgressHtml(job);
+      el.hidden = false;
+      var btn = document.getElementById("btn-cancel-job");
+      if (btn && !jobIsFinished(job)) {
+        btn.addEventListener("click", function () {
+          btn.disabled = true;
+          btn.textContent = "Отменяем...";
+          fetch("/api/plan-jobs/" + jobId + "/cancel", { method: "POST" });
+        });
+      }
+    }
+    pollJob(jobId, render).then(onFinished).catch(function (err) { toast(err.message, true); });
+  }
+
+  // Общий разбор исхода фоновой работы — вызывается и сразу после запуска
+  // расчета/проверки (получили 202), и при переподключении к уже идущей
+  // работе после перезагрузки вкладки (см. reconnectActiveJob).
+  function handleJobFinished(job, task) {
+    var failure = jobFailureMessage(job);
+    if (failure) { toast(failure, true); showTaskDetailScreen(task); return; }
+    if (job.kind === "plan") {
+      fetch("/api/plans/" + job.result_plan_id).then(function (r) { return r.json(); }).then(function (plan) {
+        toast("Расчет завершен: " + plan.sortie_count + " вылет(ов)", plan.warnings.length > 0);
+        loadPlan(plan.id, task);
+      });
+      return;
+    }
+    // kind === "safety"
+    Promise.all([
+      fetch("/api/plans/" + job.result_plan_id).then(function (r) { return r.json(); }),
+      fetch("/api/safety-checks/latest?plan_id=" + job.result_plan_id).then(function (r) { return r.json(); })
+    ]).then(function (results) {
+      var plan = results[0], report = results[1];
+      if (report.auto_recalc_count > 0) {
+        toast("Автоматических пересчетов: " + report.auto_recalc_count + " из 3", report.status !== "Пройдена");
+      }
+      showSafetyScreen(task, plan, report);
+    });
+  }
+
+  function reconnectActiveJob(task) {
+    // ПЛН.ФТ.5: получасовой расчет должен переживать перезагрузку вкладки —
+    // если по задаче уже есть неоконченная работа, сразу показываем ее
+    // прогресс вместо кнопки «Рассчитать», а не даем запустить вторую.
+    fetch("/api/plan-jobs?task_id=" + task.id).then(function (r) { return r.json(); }).then(function (jobs) {
+      var active = jobs.filter(function (j) { return !jobIsFinished(j); })[0];
+      if (active) runJobInSidebar(active.id, function (job) { handleJobFinished(job, task); });
+    });
+  }
+
   function runPlanCalculation(task) {
     var fd = new FormData();
     fd.append("task_id", task.id);
     return fetch("/api/plans", { method: "POST", body: fd })
       .then(function (res) {
+        if (res.status === 202) {
+          return res.json().then(function (body) {
+            return new Promise(function (resolve) {
+              runJobInSidebar(body.job.id, function (job) { resolve({ job: job }); });
+            });
+          });
+        }
         if (!res.ok) {
           return res.json().then(function (body) { throw new Error(body.detail || "Не удалось рассчитать план"); });
         }
-        return res.json();
+        return res.json().then(function (summary) { return { summary: summary }; });
       })
-      .then(function (summary) {
-        toast("Расчет завершен: " + summary.sortie_count + " вылет(ов)", summary.warnings.length > 0);
-        loadPlan(summary.id, task);
+      .then(function (result) {
+        if (result.job) { handleJobFinished(result.job, task); return; }
+        toast("Расчет завершен: " + result.summary.sortie_count + " вылет(ов)", result.summary.warnings.length > 0);
+        loadPlan(result.summary.id, task);
       })
       .catch(function (err) { toast(err.message, true); });
   }
@@ -1897,12 +2008,21 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     fd.append("plan_id", plan.id);
     return fetch("/api/safety-checks", { method: "POST", body: fd })
       .then(function (res) {
+        if (res.status === 202) {
+          return res.json().then(function (body) {
+            return new Promise(function (resolve) {
+              runJobInSidebar(body.job.id, function (job) { resolve({ job: job }); });
+            });
+          });
+        }
         if (!res.ok) {
           return res.json().then(function (body) { throw new Error(body.detail || "Не удалось выполнить проверку"); });
         }
-        return res.json();
+        return res.json().then(function (report) { return { report: report }; });
       })
-      .then(function (report) {
+      .then(function (result) {
+        if (result.job) { handleJobFinished(result.job, task); return; }
+        var report = result.report;
         if (report.plan_id === plan.id) {
           showSafetyScreen(task, plan, report);
           return;
@@ -2123,12 +2243,22 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     var byUav = {};
     plan.sorties.forEach(function (s) { (byUav[s.uav_id] = byUav[s.uav_id] || []).push(s); });
     var uavIds = Object.keys(byUav);
+    // При переносе продуктового стека семантика PlanDetail.status изменилась:
+    // "Проверен" теперь означает "проверка выполнена" (пройдена или нет), а
+    // не "пройдена без нарушений", как было раньше — решение "можно
+    // подтвердить" вынесено на сам отчет (SafetyReport.status), см.
+    // main/README.md. Отчет мог относиться к более старой версии плана
+    // (report.plan_id !== plan.id), если пока был открыт этот экран запущен
+    // новый расчет/проверка, — тогда его нельзя считать актуальным.
+    var reportIsCurrent = !!(report && report.plan_id === plan.id);
+    var passed = reportIsCurrent && report.status === "Пройдена";
     // Пользовательское расширение поверх ЭКС.ФТ.2: если оператор явно отметил
     // принятыми ВСЕ нарушения последнего отчета (галочки на Экране 5), план
-    // можно подтвердить и в статусе "Черновик" — сервер сам перепроверяет
-    // это условие (export_routes._violations_overridden), клиентский флаг
-    // ниже только решает, какую форму показать.
-    var canOverride = !!(report && report.status === "Есть нарушения" && report.violations_acknowledged);
+    // можно подтвердить, несмотря на нарушения — сервер сам перепроверяет
+    // это условие (plan_service.confirm_plan), клиентский флаг ниже только
+    // решает, какую форму показать.
+    var canOverride = reportIsCurrent && report.status === "Есть нарушения" && report.violations_acknowledged;
+    var confirmed = plan.status === "Подтвержден" || plan.status === "Выгружен";
 
     var html = "";
     html += '<a href="#" class="back-link" id="btn-back">&larr; К проверке безопасности</a>';
@@ -2136,17 +2266,17 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     html += '<p class="sb-sub">' + escapeHtml(task.name) + " · план версии " + plan.version + "</p>";
     html += planStatusBadgeHtml(plan.status);
 
-    if (plan.status === "Черновик" && canOverride) {
+    if (!confirmed && canOverride) {
       html += '<p class="hint" style="margin-top:10px">Проверка безопасности нашла нарушения, но оператор отметил принятыми все из них. План можно подтвердить в обход обычного запрета.</p>';
       html += '<label for="confirm-by">ФИО подтверждающего</label>';
       html += '<input type="text" id="confirm-by" value="Оператор">';
       html += '<button class="btn primary" id="btn-confirm-plan" style="width:100%;margin-top:10px">Подтвердить план (с принятыми нарушениями)</button>';
-    } else if (plan.status === "Черновик") {
+    } else if (!confirmed && !passed) {
       // ЭКС.ФТ.2: сюда можно попасть только по свежему "Пройдена" или по
-      // принятым нарушениям, но статус мог устареть, если пока открыт этот
-      // экран был запущен новый расчет/проверка.
+      // принятым нарушениям, но проверка могла устареть или не выполняться
+      // вовсе для этой версии плана.
       html += '<p class="hint" style="margin-top:10px">План не прошел проверку безопасности без нарушений и не все нарушения отмечены принятыми — подтверждение недоступно. Вернитесь в модуль «Проверка безопасности».</p>';
-    } else if (plan.status === "Проверен") {
+    } else if (!confirmed) {
       html += '<p class="hint" style="margin-top:10px">Проверка безопасности пройдена без нарушений. Подтвердите план, чтобы разблокировать экспорт маршрутов по каждому БВС.</p>';
       html += '<label for="confirm-by">ФИО подтверждающего</label>';
       html += '<input type="text" id="confirm-by" value="Оператор">';
