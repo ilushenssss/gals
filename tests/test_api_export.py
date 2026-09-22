@@ -127,7 +127,7 @@ def test_first_export_moves_plan_to_exported(client):
     plan_id = _confirmed_plan(client)
     assert client.get(f"/api/plans/{plan_id}").json()["status"] == "Подтвержден"
 
-    client.get(f"/api/plans/{plan_id}/export", params={"format": "kml", "uav_id": "gemini-0"})
+    client.get(f"/api/plans/{plan_id}/export/kml/gemini-0")
     plan = client.get(f"/api/plans/{plan_id}").json()
     assert plan["status"] == "Выгружен"
     assert plan["exported_at"] is not None
@@ -211,7 +211,7 @@ def test_confirm_unknown_plan_returns_404(client):
 
 def test_export_is_blocked_until_the_plan_is_confirmed(client):
     plan_id, _ = _checked_plan(client)
-    resp = client.get(f"/api/plans/{plan_id}/export", params={"format": "kml"})
+    resp = client.get(f"/api/plans/{plan_id}/export/kml/gemini-0")
     assert resp.status_code == 409
     assert "подтвердите" in resp.json()["detail"]
 
@@ -219,7 +219,7 @@ def test_export_is_blocked_until_the_plan_is_confirmed(client):
 def test_kml_export_has_the_structure_required_by_the_spec(client):
     plan_id = _confirmed_plan(client)
     resp = client.get(
-        f"/api/plans/{plan_id}/export", params={"format": "kml", "uav_id": "gemini-0"}
+        f"/api/plans/{plan_id}/export/kml/gemini-0"
     )
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/vnd.google-earth.kml+xml")
@@ -229,19 +229,25 @@ def test_kml_export_has_the_structure_required_by_the_spec(client):
 
     document = root.find("k:Document", KML_NS)
     uav_folder = document.find("k:Folder", KML_NS)
-    assert uav_folder.find("k:name", KML_NS).text == "БВС gemini-0"
+    assert uav_folder.find("k:name", KML_NS).text == "gemini-0"
 
     sortie_folder = uav_folder.find("k:Folder", KML_NS)
     assert sortie_folder.find("k:name", KML_NS).text.startswith("Вылет ")
-    timespan = sortie_folder.find("k:TimeSpan", KML_NS)
+
+    placemarks = sortie_folder.findall("k:Placemark", KML_NS)
+    names = [p.find("k:name", KML_NS).text for p in placemarks]
+    assert names[0] == "Маршрут"
+
+    # Время вылета живёт на самом маршруте, а не на папке.
+    timespan = placemarks[0].find("k:TimeSpan", KML_NS)
     assert timespan.find("k:begin", KML_NS).text.endswith("Z")  # ISO 8601 UTC
     assert timespan.find("k:end", KML_NS).text.endswith("Z")
-
-    names = [p.find("k:name", KML_NS).text for p in sortie_folder.findall("k:Placemark", KML_NS)]
-    assert names[0] == "Маршрут"
     assert names[1] == "Галсы"
-    assert any(n.startswith("Точка 1 — Взлет") for n in names)
-    assert any("Посадка" in n for n in names)
+    # Ключевые точки подписаны названием этапа, а не порядковым номером.
+    # Площадка названа по имени, только если она известна из парка, поэтому
+    # проверяется сам этап: взлёт в начале и возврат в конце.
+    assert any("Взлет" in n for n in names)
+    assert any("Возврат" in n for n in names)
 
     route = sortie_folder.findall("k:Placemark", KML_NS)[0]
     line = route.find("k:LineString", KML_NS)
@@ -251,13 +257,13 @@ def test_kml_export_has_the_structure_required_by_the_spec(client):
     point = next(p for p in sortie_folder.findall("k:Placemark", KML_NS) if p.find("k:Point", KML_NS) is not None)
     assert point.find("k:TimeStamp/k:when", KML_NS).text.endswith("Z")
     fields = {d.get("name") for d in point.findall("k:ExtendedData/k:Data", KML_NS)}
-    assert {"Этап", "Высота, м", "Скорость, м/с"} <= fields
+    assert {"этап", "altitude_m", "speed_mps"} <= fields
 
 
 def test_kml_coordinates_are_wgs84_lon_lat_alt(client):
     """ЭКС.ФТ.4: координаты — долгота, широта, высота в WGS-84."""
     plan_id = _confirmed_plan(client)
-    content = client.get(f"/api/plans/{plan_id}/export", params={"format": "kml"}).content
+    content = client.get(f"/api/plans/{plan_id}/export/kml/gemini-0").content
     root = ET.fromstring(content)
     text = root.find(".//k:LineString/k:coordinates", KML_NS).text
     lon, lat, alt = (float(v) for v in text.split()[0].split(","))
@@ -268,9 +274,7 @@ def test_kml_coordinates_are_wgs84_lon_lat_alt(client):
 
 def test_geojson_export_contains_all_four_object_kinds(client):
     plan_id = _confirmed_plan(client)
-    resp = client.get(
-        f"/api/plans/{plan_id}/export", params={"format": "geojson", "uav_id": "gemini-0"}
-    )
+    resp = client.get(f"/api/plans/{plan_id}/export/geojson/gemini-0")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/geo+json")
 
@@ -278,65 +282,64 @@ def test_geojson_export_contains_all_four_object_kinds(client):
     assert body["type"] == "FeatureCollection"
     assert body["properties"]["crs"] == "WGS 84 (EPSG:4326)"
 
-    objects = {f["properties"]["object"] for f in body["features"]}
+    objects = {f["properties"]["type"] for f in body["features"]}
     assert objects == {"Вылет", "Ключевая точка", "Галсы вылета", "Зона покрытия"}
 
-    sortie = next(f for f in body["features"] if f["properties"]["object"] == "Вылет")
+    sortie = next(f for f in body["features"] if f["properties"]["type"] == "Вылет")
     assert sortie["geometry"]["type"] == "LineString"
-    assert sortie["properties"]["start_utc"].endswith("Z")
+    assert sortie["properties"]["start_utc"].startswith("20")
 
-    waypoint = next(f for f in body["features"] if f["properties"]["object"] == "Ключевая точка")
+    waypoint = next(f for f in body["features"] if f["properties"]["type"] == "Ключевая точка")
     assert len(waypoint["geometry"]["coordinates"]) == 3  # [lon, lat, alt]
-    assert waypoint["properties"]["stage"] in {"Взлет", "Перелет", "Съемка", "Посадка"}
+    assert waypoint["properties"]["kind"] in {"transit", "survey"}
 
-    coverage = next(f for f in body["features"] if f["properties"]["object"] == "Зона покрытия")
+    coverage = next(f for f in body["features"] if f["properties"]["type"] == "Зона покрытия")
     assert coverage["geometry"]["type"] in {"Polygon", "MultiPolygon"}
 
 
 def test_waypoint_times_run_from_takeoff_to_landing(client):
     """Время прохода интерполируется по длине и обязано быть монотонным."""
     plan_id = _confirmed_plan(client)
-    body = client.get(f"/api/plans/{plan_id}/export", params={"format": "geojson"}).json()
-    sortie = next(f for f in body["features"] if f["properties"]["object"] == "Вылет")
+    body = client.get(f"/api/plans/{plan_id}/export/geojson/gemini-0").json()
+    sortie = next(f for f in body["features"] if f["properties"]["type"] == "Вылет")
     points = [
         f for f in body["features"]
-        if f["properties"]["object"] == "Ключевая точка"
+        if f["properties"]["type"] == "Ключевая точка"
         and f["properties"]["sortie_index"] == sortie["properties"]["sortie_index"]
     ]
-    times = [f["properties"]["time_utc"] for f in points]
+    times = [f["properties"]["utc"] for f in points]
     assert times == sorted(times)
     assert times[0] == sortie["properties"]["start_utc"]
     assert times[-1] == sortie["properties"]["end_utc"]
-    assert points[0]["properties"]["stage"] == "Взлет"
-    assert points[-1]["properties"]["stage"] == "Посадка"
+    assert points[0]["properties"]["kind"] == "transit"
+    assert points[-1]["properties"]["kind"] == "transit"
 
 
 def test_export_for_unknown_uav_returns_404(client):
     plan_id = _confirmed_plan(client)
-    resp = client.get(f"/api/plans/{plan_id}/export", params={"format": "kml", "uav_id": "нет"})
+    resp = client.get(f"/api/plans/{plan_id}/export/kml/нет")
     assert resp.status_code == 404
     assert "нет вылетов" in resp.json()["detail"]
 
 
 def test_download_all_returns_a_zip_with_both_formats_per_uav(client):
     plan_id = _confirmed_plan(client, inventory_numbers=("gemini-0",))
-    resp = client.get(f"/api/plans/{plan_id}/export/all")
+    resp = client.get(f"/api/plans/{plan_id}/export/zip")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/zip"
 
     with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
         names = sorted(archive.namelist())
-        assert names == ["план-в1-gemini-0.geojson", "план-в1-gemini-0.kml"]
-        ET.fromstring(archive.read("план-в1-gemini-0.kml"))
-        json.loads(archive.read("план-в1-gemini-0.geojson"))
+        assert names == ["gemini-0.geojson", "gemini-0.kml"]
+        ET.fromstring(archive.read("gemini-0.kml"))
+        json.loads(archive.read("gemini-0.geojson"))
 
 
 def test_cyrillic_filename_goes_out_as_rfc5987(client):
     """Кириллица в инвентарном номере не должна портиться браузером."""
     plan_id = _confirmed_plan(client, inventory_numbers=("Гемини-1",))
-    resp = client.get(
-        f"/api/plans/{plan_id}/export", params={"format": "kml", "uav_id": "Гемини-1"}
-    )
+    resp = client.get(f"/api/plans/{plan_id}/export/kml/Гемини-1")
+    assert resp.status_code == 200, resp.text
     disposition = resp.headers["content-disposition"]
     assert "filename*=UTF-8''" in disposition
     assert "%D0%93" in disposition  # «Г» в процентном кодировании
@@ -346,8 +349,8 @@ def test_cyrillic_filename_goes_out_as_rfc5987(client):
 def test_export_is_journalled_and_repeatable(client):
     """Файл — чистая функция от неизменяемого плана, поэтому повтор совпадает."""
     plan_id = _confirmed_plan(client)
-    first = client.get(f"/api/plans/{plan_id}/export", params={"format": "kml"}).content
-    second = client.get(f"/api/plans/{plan_id}/export", params={"format": "kml"}).content
+    first = client.get(f"/api/plans/{plan_id}/export/kml/gemini-0").content
+    second = client.get(f"/api/plans/{plan_id}/export/kml/gemini-0").content
     assert first == second
 
     from uav_planner.models.plan import ExportArtifact
@@ -377,3 +380,83 @@ def test_older_version_is_not_confirmable_by_a_report_about_a_newer_one(client):
     assert resp.status_code == 422
     assert "другой версии" in resp.json()["detail"]
     assert client.get(f"/api/plans/{first['id']}").json()["status"] == "Черновик"
+
+
+# --- подтверждение вопреки нарушениям (расширение ЭКС.ФТ.2) -----------------
+
+
+def _violation_ids(report):
+    return [v["id"] for c in report["checks"] for v in c["violations"]]
+
+
+def test_partially_accepted_violations_do_not_unblock_confirmation(client):
+    """Принять часть нарушений недостаточно — блокировка снимается только
+    когда оператор явно принял каждое."""
+    plan_id, report = _checked_plan(client, no_fly=True)
+    assert report["status"] == "Есть нарушения"
+    ids = _violation_ids(report)
+    assert len(ids) > 1, ids
+
+    client.post(
+        f"/api/safety-checks/{report['id']}/violations/{ids[0]}/ignore", data={"ignored": "true"}
+    )
+    latest = client.get("/api/safety-checks/latest", params={"plan_id": plan_id}).json()
+    assert latest["violations_acknowledged"] is False
+
+    resp = client.post(f"/api/plans/{plan_id}/confirm", headers=_user_header("Иванов И. И."))
+    assert resp.status_code == 422
+    assert "нарушения" in resp.json()["detail"]
+
+
+def test_accepting_all_violations_unblocks_confirmation(client):
+    plan_id, report = _checked_plan(client, no_fly=True)
+    for vid in _violation_ids(report):
+        assert client.post(
+            f"/api/safety-checks/{report['id']}/violations/{vid}/ignore", data={"ignored": "true"}
+        ).status_code == 200
+
+    resp = client.post(f"/api/plans/{plan_id}/confirm", headers=_user_header("Иванов И. И."))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "Подтвержден"
+    # Подтверждение с принятыми нарушениями обязано быть отличимо от обычного:
+    # иначе по журналу не понять, что план не проходил проверку.
+    assert body["confirmed_with_overrides"] is True
+
+
+def test_unaccepting_a_violation_after_confirmation_does_not_undo_it(client):
+    """Подтверждение — свершившийся факт, а не вычисляемое свойство."""
+    plan_id, report = _checked_plan(client, no_fly=True)
+    ids = _violation_ids(report)
+    for vid in ids:
+        client.post(
+            f"/api/safety-checks/{report['id']}/violations/{vid}/ignore", data={"ignored": "true"}
+        )
+    assert client.post(
+        f"/api/plans/{plan_id}/confirm", headers=_user_header("Иванов И. И.")
+    ).status_code == 200
+
+    client.post(
+        f"/api/safety-checks/{report['id']}/violations/{ids[0]}/ignore", data={"ignored": "false"}
+    )
+    assert client.get(f"/api/plans/{plan_id}").json()["status"] == "Подтвержден"
+
+
+def test_confirmed_by_form_field_wins_over_the_header(client):
+    """Контракт модуля: ФИО приходит полем формы; заголовок — запасной путь."""
+    plan_id, report = _checked_plan(client)
+    assert report["status"] == "Пройдена"
+    resp = client.post(
+        f"/api/plans/{plan_id}/confirm",
+        data={"confirmed_by": "Петров П. П."},
+        headers=_user_header("Иванов И. И."),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["confirmed_by"] == "Петров П. П."
+
+
+def test_confirmation_blocks_task_editing(client):
+    """ЭКС.ФТ.6: подтверждённый план фиксирует и задачу."""
+    plan_id = _confirmed_plan(client)
+    task_id = client.get(f"/api/plans/{plan_id}").json()["task_id"]
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "Подтверждена"

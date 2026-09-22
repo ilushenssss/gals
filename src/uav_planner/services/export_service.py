@@ -1,409 +1,321 @@
-"""Формирование файлов экспорта — ЭКС.ФТ.4, ЭКС.ФТ.7-8.
+"""Построение KML/GeoJSON для модуля «Подтверждение и экспорт» — ЭКС.ФТ.4,
+ЭКС.ФТ.7-8. Работает только с уже посчитанным ``PlanDetail`` (координаты в
+WGS-84, как их хранит ``plan_service``) — доступность экспорта (план должен
+быть в статусе «Подтвержден»/«Выгружен») проверяет ``export_routes``, эти
+функции сами статус не проверяют и годятся для любого плана.
 
-Чистые функции над ``PlanDetail``: ни БД, ни HTTP. Это осознанно — файл
-экспорта обязан быть воспроизводим байт в байт по неизменяемому плану
-(ЭКС.ФТ.3), поэтому сами файлы нигде не хранятся, а таблица
-``export_artifacts`` ведет только журнал выгрузок.
+Известная несостыковка в требованиях (не ошибка реализации): ЭКС.ФТ.8 ссылается
+на таблицу свойств GeoJSON-объектов «см. «Методы», раздел 7» — в
+``docs/realization/uav_planner_methods.html`` раздел 7 называется «Перелеты и
+достижимость площадок» и такой таблицы не содержит. Настоящая таблица (и
+структура KML) — раздел 15 того же документа («Состав экспортируемых
+файлов»), спроектирована по уже имеющимся полям ``PlanSortie``/
+``PlanSortiePhase``, а не наугад; текст самого требования не правился задним
+числом.
 
-Координаты — WGS-84 (ЭКС.ФТ.4): план уже хранится в WGS-84, обратное
-проецирование не требуется. UTM здесь нужен ровно для двух метрических
-операций — длин вдоль маршрута (интерполяция времени прохода) и буфера полосы
-захвата (зона покрытия); результат обеих возвращается в WGS-84.
-
-**Чего в плане v1 нет и как это честно восполнено.** Расчетное ядро сохраняет
-на вылет только линию маршрута, линии галсов и время старта/посадки —
-отдельного списка ключевых точек с этапом и временем прохода (``waypoints``
-из ЭКС.ФТ.8) в нем пока не существует. Поэтому ключевые точки выводятся из
-самого маршрута:
-
-* точка — вершина линии маршрута;
-* этап: первая — «Взлет», последняя — «Посадка», совпадающая с вершиной
-  галса — «Съемка», остальные — «Перелет»;
-* время прохода — линейная интерполяция между ``start_utc`` и ``end_utc`` по
-  накопленной метрической длине, что соответствует принятой в v1 постоянной
-  крейсерской скорости (ускорения, развороты и ожидание на земле появятся
-  вместе с модулем ``motion``).
-
-Набор свойств GeoJSON ТЗ выносит в документ «Методы, раздел 7», которого у нас
-нет; зафиксированный здесь набор описан в README (ответы экспертов, п. 22).
+Другое v1-ограничение: ни маршрут вылета, ни этапы не хранят высотный
+профиль (взлет/набор/снижение) — вся расчетная модель ведет высоту съемки
+как одну константу на вылет (``PlanDetail.height_m``, см. также
+``uav_planner.geometry.Obstacle.is_hole_at``). Поэтому во всех экспортных
+геометриях (кроме «Зоны покрытия» — она проекция на землю) третья координата
+— это ``plan.height_m``, а не honest altitude profile.
 """
 
 from __future__ import annotations
 
 import io
+import json
 import logging
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
-from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape as xml_escape
 
-from shapely.geometry import LineString, mapping, shape
-from shapely.geometry.base import BaseGeometry
+from shapely.geometry import mapping, shape
 from shapely.ops import unary_union
 
-from uav_planner import repositories
-from uav_planner.api.schemas.plan import PlanDetail, PlanSortie
-from uav_planner.domain.errors import ValidationError
 from uav_planner.geometry import Projector
 
-log = logging.getLogger(__name__)
-
-KML_NS = "http://www.opengis.net/kml/2.2"
-KML_MEDIA_TYPE = "application/vnd.google-earth.kml+xml"
-GEOJSON_MEDIA_TYPE = "application/geo+json"
-ZIP_MEDIA_TYPE = "application/zip"
-
-STAGE_TAKEOFF = "Взлет"
-STAGE_TRANSIT = "Перелет"
-STAGE_SURVEY = "Съемка"
-STAGE_LANDING = "Посадка"
-
-# Сравнение вершин маршрута с вершинами галсов — по округленным координатам:
-# и те, и другие получены одним обратным проецированием из одной точки UTM,
-# но проходят через разные геометрии, и точного равенства float ждать нельзя.
-# 1e-9 градуса — доли миллиметра, заведомо меньше любого реального различия.
-_COORD_PRECISION = 9
+from uav_planner import repositories
+from uav_planner.domain.errors import ValidationError
+from uav_planner.api.schemas.plan import PlanDetail, PlanSortie
 
 
 class ExportError(ValueError):
-    """План нельзя выгрузить в запрошенном виде."""
+    """Экспорт невозможен: неизвестный формат или БВС, которого нет в плане."""
 
 
-def _round(coord: tuple[float, float]) -> tuple[float, float]:
-    return (round(coord[0], _COORD_PRECISION), round(coord[1], _COORD_PRECISION))
+def _sorties_by_uav(plan: PlanDetail) -> dict[str, list[PlanSortie]]:
+    by_uav: dict[str, list[PlanSortie]] = {}
+    for s in plan.sorties:
+        by_uav.setdefault(s.uav_id, []).append(s)
+    return by_uav
 
 
-def _iso(moment: datetime) -> str:
-    """ISO 8601 в UTC с суффиксом Z — формат, который требует ЭКС.ФТ.8."""
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def uav_ids(plan: PlanDetail) -> list[str]:
-    """Состав группы в порядке появления — список для кнопок ЭКС.ФТ.7."""
-    return list(dict.fromkeys(s.uav_id for s in plan.sorties))
-
-
-def _sorties_of(plan: PlanDetail, uav_id: str | None) -> list[PlanSortie]:
-    if uav_id is None:
-        return list(plan.sorties)
-    sorties = [s for s in plan.sorties if s.uav_id == uav_id]
+def _sorties_for_uav(plan: PlanDetail, uav_id: str) -> list[PlanSortie]:
+    sorties = _sorties_by_uav(plan).get(uav_id)
     if not sorties:
+        # Именно ExportError, а не KeyError: роутер переводит KeyError в «план
+        # не найден», и оператор получил бы неверную причину отказа.
         raise ExportError(f"в плане нет вылетов БВС «{uav_id}»")
     return sorties
 
 
-def _projector_for(plan: PlanDetail) -> Projector:
-    geoms = [shape(s.track_geojson) for s in plan.sorties]
-    return Projector.for_geometry(unary_union(geoms))
+def _add_altitude(coords: Any, alt: float) -> Any:
+    """Достраивает третью координату (высоту) ко всем точкам GeoJSON-геометрии
+    любой вложенности — Point/LineString/MultiLineString/Polygon (ЭКС.ФТ.4:
+    экспорт обязан отдавать `[lon, lat, alt]`, а внутренние геометрии плана
+    хранятся 2D)."""
+    if coords and isinstance(coords[0], (int, float)):
+        return [coords[0], coords[1], alt]
+    return [_add_altitude(c, alt) for c in coords]
 
 
-def waypoints_of(sortie: PlanSortie, plan: PlanDetail, projector: Projector) -> list[dict[str, Any]]:
-    """Ключевые точки вылета: этап, время прохода, высота, скорость."""
-    route = shape(sortie.track_geojson)
-    coords = list(route.coords)
-    survey = shape(sortie.survey_tracks_geojson)
-    survey_lines = list(survey.geoms) if survey.geom_type == "MultiLineString" else [survey]
-    survey_vertices = {_round(c) for line in survey_lines for c in line.coords}
+def _key_points(sortie: PlanSortie, projector: Projector) -> list[dict]:
+    """Ключевые точки вылета (взлет, границы каждого этапа, посадка).
 
-    route_utm = projector.to_utm(LineString(coords))
-    utm_coords = list(route_utm.coords)
-    cumulative = [0.0]
-    for previous, point in zip(utm_coords, utm_coords[1:]):
-        step = ((point[0] - previous[0]) ** 2 + (point[1] - previous[1]) ** 2) ** 0.5
-        cumulative.append(cumulative[-1] + step)
-    total = cumulative[-1] or 1.0
-    duration = (sortie.end_utc - sortie.start_utc).total_seconds()
+    ``PlanSortiePhase`` не хранит собственные координаты (модуль
+    «Планирование» хранит только суммарный маршрут вылета целиком), поэтому
+    точки честно восстанавливаются интерполяцией вдоль фактического
+    маршрута (``track_geojson``) пропорционально накопленному пройденному
+    расстоянию — весь вылет летится на одной крейсерской скорости (см.
+    ``plan_service._build_sortie_legs``), поэтому расстояние вдоль маршрута и
+    время линейно связаны, и интерполяция по длине физически точна, а не
+    приближение."""
+    if not sortie.phases:
+        return []
+    route_utm = projector.to_utm(shape(sortie.track_geojson))
+    total_len = route_utm.length
+    total_dist = sum(p.distance_m for p in sortie.phases) or 1.0
+    scale = total_len / total_dist
 
-    last = len(coords) - 1
-    points: list[dict[str, Any]] = []
-    for index, coord in enumerate(coords):
-        if index == 0:
-            stage = STAGE_TAKEOFF
-        elif index == last:
-            stage = STAGE_LANDING
-        elif _round(coord) in survey_vertices:
-            stage = STAGE_SURVEY
-        else:
-            stage = STAGE_TRANSIT
-        on_ground = stage in (STAGE_TAKEOFF, STAGE_LANDING)
+    points: list[dict] = [{
+        "label": sortie.phases[0].label, "kind": sortie.phases[0].kind,
+        "utc": sortie.phases[0].start_utc, "point": projector.to_wgs84(route_utm.interpolate(0.0)),
+    }]
+    cumulative = 0.0
+    for phase in sortie.phases:
+        cumulative += phase.distance_m
+        pt_utm = route_utm.interpolate(min(cumulative * scale, total_len))
         points.append({
-            "index": index,
-            "stage": stage,
-            "lon": coord[0],
-            "lat": coord[1],
-            "altitude_m": 0.0 if on_ground else plan.height_m,
-            "speed_mps": 0.0 if on_ground else plan.cruise_speed_mps,
-            "time_utc": sortie.start_utc + timedelta(seconds=duration * cumulative[index] / total),
+            "label": phase.label, "kind": phase.kind,
+            "utc": phase.end_utc, "point": projector.to_wgs84(pt_utm),
         })
     return points
 
 
-def coverage_of(sortie: PlanSortie, plan: PlanDetail, projector: Projector) -> BaseGeometry | None:
-    """Зона покрытия вылета — полоса захвата вдоль галсов (ЭКС.ФТ.8)."""
-    survey = shape(sortie.survey_tracks_geojson)
-    if survey.is_empty or plan.swath_m <= 0:
+def _coverage_polygon(sortie: PlanSortie, swath_m: float, projector: Projector):
+    """«Зона покрытия» вылета — полоса шириной ``swath_m`` вдоль галсов
+    (без переходов), объединенная в один полигон. Приближение: реальная
+    зона покрытия зависит от ориентации кадра камеры, здесь взята
+    симметричная полоса вокруг линии галса (та же модель, что использует
+    ``safety.check_coverage`` для рабочей области)."""
+    survey_utm = projector.to_utm(shape(sortie.survey_tracks_geojson))
+    lines = list(survey_utm.geoms) if survey_utm.geom_type == "MultiLineString" else [survey_utm]
+    lines = [line for line in lines if not line.is_empty]
+    if not lines:
         return None
-    buffered = projector.to_utm(survey).buffer(plan.swath_m / 2)
-    return None if buffered.is_empty else projector.to_wgs84(buffered)
+    return unary_union([line.buffer(swath_m / 2.0, cap_style=2) for line in lines])
 
 
-# --- KML --------------------------------------------------------------------
+def to_geojson(plan: PlanDetail, uav_id: str) -> dict:
+    """ЭКС.ФТ.7-8: GeoJSON ``FeatureCollection`` для одного БВС — «Вылет»
+    (LineString), «Ключевая точка» (Point), «Галсы вылета» (MultiLineString),
+    «Зона покрытия» (Polygon), по одному набору на каждый вылет этого БВС."""
+    sorties = _sorties_for_uav(plan, uav_id)
+    projector = Projector.for_geometry(shape(sorties[0].track_geojson))
 
-
-def _kml_coords(coords, altitude: float) -> str:
-    return " ".join(f"{lon:.9f},{lat:.9f},{altitude:.1f}" for lon, lat in coords)
-
-
-def _extended_data(parent: ET.Element, values: dict[str, Any]) -> None:
-    container = ET.SubElement(parent, "ExtendedData")
-    for name, value in values.items():
-        node = ET.SubElement(container, "Data", {"name": name})
-        ET.SubElement(node, "value").text = str(value)
-
-
-def to_kml(plan: PlanDetail, uav_id: str | None = None) -> bytes:
-    """KML по одному БВС (или по всей группе, если ``uav_id`` не задан).
-
-    Структура ЭКС.ФТ.8: ``Document → Folder(БВС) → Folder(вылет)``, маршрут
-    линией с ``altitudeMode=relativeToGround``, галсы — ``MultiGeometry``,
-    ``TimeSpan`` на вылет и ``TimeStamp`` на ключевую точку.
-    """
-    sorties = _sorties_of(plan, uav_id)
-    projector = _projector_for(plan)
-
-    kml = ET.Element("kml", {"xmlns": KML_NS})
-    document = ET.SubElement(kml, "Document")
-    ET.SubElement(document, "name").text = f"План версии {plan.version}"
-    _extended_data(document, {
-        "Идентификатор плана": plan.id,
-        "Задача": plan.task_id,
-        "Версия": plan.version,
-        "Модель БВС": plan.uav_model,
-        "Высота съемки, м": round(plan.height_m, 1),
-        "Полоса захвата, м": round(plan.swath_m, 1),
-        "Крейсерская скорость, м/с": round(plan.cruise_speed_mps, 1),
-        "Критерий": plan.criterion_mode,
-    })
-
-    for current_uav in dict.fromkeys(s.uav_id for s in sorties):
-        uav_folder = ET.SubElement(document, "Folder")
-        ET.SubElement(uav_folder, "name").text = f"БВС {current_uav}"
-
-        for sortie in (s for s in sorties if s.uav_id == current_uav):
-            sortie_folder = ET.SubElement(uav_folder, "Folder")
-            ET.SubElement(sortie_folder, "name").text = f"Вылет {sortie.sortie_index + 1}"
-            timespan = ET.SubElement(sortie_folder, "TimeSpan")
-            ET.SubElement(timespan, "begin").text = _iso(sortie.start_utc)
-            ET.SubElement(timespan, "end").text = _iso(sortie.end_utc)
-
-            route = ET.SubElement(sortie_folder, "Placemark")
-            ET.SubElement(route, "name").text = "Маршрут"
-            _extended_data(route, {
-                "БВС": sortie.uav_id,
-                "Вылет": sortie.sortie_index + 1,
-                "Площадка старта": sortie.takeoff_site or "",
-                "Площадка посадки": sortie.landing_site or "",
-                "Налет, с": round(sortie.flight_time_s, 1),
-                "Длина галсов, м": round(sortie.distance_m, 1),
-            })
-            line = ET.SubElement(route, "LineString")
-            ET.SubElement(line, "altitudeMode").text = "relativeToGround"
-            ET.SubElement(line, "tessellate").text = "1"
-            ET.SubElement(line, "coordinates").text = _kml_coords(
-                shape(sortie.track_geojson).coords, plan.height_m
-            )
-
-            survey = shape(sortie.survey_tracks_geojson)
-            survey_lines = list(survey.geoms) if survey.geom_type == "MultiLineString" else [survey]
-            tracks = ET.SubElement(sortie_folder, "Placemark")
-            ET.SubElement(tracks, "name").text = "Галсы"
-            multi = ET.SubElement(tracks, "MultiGeometry")
-            for track in survey_lines:
-                track_line = ET.SubElement(multi, "LineString")
-                ET.SubElement(track_line, "altitudeMode").text = "relativeToGround"
-                ET.SubElement(track_line, "coordinates").text = _kml_coords(
-                    track.coords, plan.height_m
-                )
-
-            for point in waypoints_of(sortie, plan, projector):
-                placemark = ET.SubElement(sortie_folder, "Placemark")
-                ET.SubElement(placemark, "name").text = (
-                    f"Точка {point['index'] + 1} — {point['stage']}"
-                )
-                stamp = ET.SubElement(placemark, "TimeStamp")
-                ET.SubElement(stamp, "when").text = _iso(point["time_utc"])
-                _extended_data(placemark, {
-                    "Этап": point["stage"],
-                    "Высота, м": round(point["altitude_m"], 1),
-                    "Скорость, м/с": round(point["speed_mps"], 1),
-                })
-                geometry = ET.SubElement(placemark, "Point")
-                ET.SubElement(geometry, "altitudeMode").text = "relativeToGround"
-                ET.SubElement(geometry, "coordinates").text = _kml_coords(
-                    [(point["lon"], point["lat"])], point["altitude_m"]
-                )
-
-    ET.indent(kml, space="  ")
-    return ET.tostring(kml, encoding="utf-8", xml_declaration=True)
-
-
-# --- GeoJSON ----------------------------------------------------------------
-
-
-def to_geojson(plan: PlanDetail, uav_id: str | None = None) -> dict[str, Any]:
-    """FeatureCollection с объектами «Вылет», «Ключевая точка», «Галсы вылета»
-    и «Зона покрытия» (ЭКС.ФТ.8). Координаты — WGS-84 (ЭКС.ФТ.4)."""
-    sorties = _sorties_of(plan, uav_id)
-    projector = _projector_for(plan)
-    features: list[dict[str, Any]] = []
-
+    features: list[dict] = []
     for sortie in sorties:
-        common = {
-            "plan_id": plan.id,
-            "plan_version": plan.version,
-            "uav_id": sortie.uav_id,
-            "sortie_index": sortie.sortie_index + 1,
-        }
         features.append({
             "type": "Feature",
             "properties": {
-                **common,
-                "object": "Вылет",
-                "takeoff_site": sortie.takeoff_site,
-                "landing_site": sortie.landing_site,
-                "start_utc": _iso(sortie.start_utc),
-                "end_utc": _iso(sortie.end_utc),
-                "flight_time_s": round(sortie.flight_time_s, 1),
-                "survey_distance_m": round(sortie.distance_m, 1),
-                "altitude_m": round(plan.height_m, 1),
-                "speed_mps": round(plan.cruise_speed_mps, 1),
+                "type": "Вылет", "uav_id": sortie.uav_id, "sortie_index": sortie.sortie_index,
+                "takeoff_site": sortie.takeoff_site, "landing_site": sortie.landing_site,
+                "start_utc": sortie.start_utc.isoformat(), "end_utc": sortie.end_utc.isoformat(),
+                "flight_time_s": sortie.flight_time_s, "distance_m": sortie.distance_m,
+                "speed_mps": plan.cruise_speed_mps, "altitude_m": plan.height_m,
             },
-            "geometry": sortie.track_geojson,
+            "geometry": {
+                "type": sortie.track_geojson["type"],
+                "coordinates": _add_altitude(sortie.track_geojson["coordinates"], plan.height_m),
+            },
         })
-
-        for point in waypoints_of(sortie, plan, projector):
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "type": "Галсы вылета", "uav_id": sortie.uav_id, "sortie_index": sortie.sortie_index,
+                "swath_m": plan.swath_m, "altitude_m": plan.height_m,
+            },
+            "geometry": {
+                "type": sortie.survey_tracks_geojson["type"],
+                "coordinates": _add_altitude(sortie.survey_tracks_geojson["coordinates"], plan.height_m),
+            },
+        })
+        for i, kp in enumerate(_key_points(sortie, projector)):
             features.append({
                 "type": "Feature",
                 "properties": {
-                    **common,
-                    "object": "Ключевая точка",
-                    "waypoint_index": point["index"] + 1,
-                    "stage": point["stage"],
-                    "time_utc": _iso(point["time_utc"]),
-                    "altitude_m": round(point["altitude_m"], 1),
-                    "speed_mps": round(point["speed_mps"], 1),
+                    "type": "Ключевая точка", "uav_id": sortie.uav_id, "sortie_index": sortie.sortie_index,
+                    "sequence": i, "label": kp["label"], "kind": kp["kind"], "utc": kp["utc"].isoformat(),
+                },
+                "geometry": {"type": "Point", "coordinates": [kp["point"].x, kp["point"].y, plan.height_m]},
+            })
+        coverage = _coverage_polygon(sortie, plan.swath_m, projector)
+        if coverage is not None and not coverage.is_empty:
+            coverage_wgs84 = projector.to_wgs84(coverage)
+            coverage_mapping = mapping(coverage_wgs84)
+            features.append({
+                "type": "Feature",
+                "properties": {
+                    "type": "Зона покрытия", "uav_id": sortie.uav_id, "sortie_index": sortie.sortie_index,
+                    "swath_m": plan.swath_m,
                 },
                 "geometry": {
-                    "type": "Point",
-                    "coordinates": [point["lon"], point["lat"], point["altitude_m"]],
+                    "type": coverage_mapping["type"],
+                    "coordinates": _add_altitude(coverage_mapping["coordinates"], 0.0),
                 },
             })
-
-        features.append({
-            "type": "Feature",
-            "properties": {
-                **common,
-                "object": "Галсы вылета",
-                "altitude_m": round(plan.height_m, 1),
-                "swath_m": round(plan.swath_m, 1),
-            },
-            "geometry": sortie.survey_tracks_geojson,
-        })
-
-        coverage = coverage_of(sortie, plan, projector)
-        if coverage is not None:
-            features.append({
-                "type": "Feature",
-                "properties": {
-                    **common,
-                    "object": "Зона покрытия",
-                    "swath_m": round(plan.swath_m, 1),
-                },
-                "geometry": mapping(coverage),
-            })
-
     return {
         "type": "FeatureCollection",
+        # Свойства уровня коллекции: выгруженный файл обязан сам говорить, из
+        # какого плана и какой версии он получен (KML это пишет в <name>).
         "properties": {
             "plan_id": plan.id,
             "task_id": plan.task_id,
             "plan_version": plan.version,
-            "uav_model": plan.uav_model,
+            "uav_id": uav_id,
             "criterion_mode": plan.criterion_mode,
-            "j1_s": round(plan.j1_s, 1),
-            "j2_s": round(plan.j2_s, 1),
+            "uav_model": plan.uav_model,
             "crs": "WGS 84 (EPSG:4326)",
         },
         "features": features,
     }
 
 
-# --- имена файлов и архив ----------------------------------------------------
+def _kml_coords(coords: list[tuple[float, float]], alt: float) -> str:
+    return " ".join(f"{lon:.7f},{lat:.7f},{alt:.1f}" for lon, lat in coords)
 
 
-def _safe(fragment: str) -> str:
-    """Инвентарный номер попадает в имя файла как есть, кроме разделителей.
-
-    Кириллицу не транслитерируем: заголовок ответа отдается в RFC 5987, и
-    браузер получает имя в UTF-8 без искажения.
-    """
-    for bad in '/\\:*?"<>|\n\r\t':
-        fragment = fragment.replace(bad, "-")
-    return fragment.strip() or "БВС"
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def filename_for(plan: PlanDetail, uav_id: str | None, fmt: str) -> str:
-    suffix = _safe(uav_id) if uav_id else "все-БВС"
-    return f"план-в{plan.version}-{suffix}.{fmt}"
+def _kml_extended_data(fields: dict[str, Any]) -> str:
+    items = "".join(
+        f'<Data name="{xml_escape(str(k))}"><value>{xml_escape(str(v))}</value></Data>'
+        for k, v in fields.items()
+    )
+    return f"<ExtendedData>{items}</ExtendedData>"
+
+
+def to_kml(plan: PlanDetail, uav_id: str) -> str:
+    """ЭКС.ФТ.7-8: KML ``Document -> Folder(БВС) -> Folder(вылет)`` с
+    Placemark «Маршрут» (LineString, ``altitudeMode=relativeToGround``,
+    ``TimeSpan``), Placemark «Галсы» (``MultiGeometry`` линий) и по одному
+    Placemark на каждую ключевую точку (``Point``, ``TimeStamp``), этап/
+    скорость/высота — в ``ExtendedData``."""
+    sorties = _sorties_for_uav(plan, uav_id)
+    projector = Projector.for_geometry(shape(sorties[0].track_geojson))
+
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>',
+        f"<name>{xml_escape(uav_id)} — план {xml_escape(plan.task_id)} версии {plan.version}</name>",
+        f"<Folder><name>{xml_escape(uav_id)}</name>",
+    ]
+    for sortie in sorties:
+        parts.append(f"<Folder><name>Вылет {sortie.sortie_index + 1}</name>")
+
+        route_coords = sortie.track_geojson["coordinates"]
+        parts.append(
+            "<Placemark><name>Маршрут</name>"
+            f"<TimeSpan><begin>{_iso(sortie.start_utc)}</begin><end>{_iso(sortie.end_utc)}</end></TimeSpan>"
+            + _kml_extended_data({
+                "uav_id": uav_id, "speed_mps": round(plan.cruise_speed_mps, 2),
+                "altitude_m": round(plan.height_m, 1),
+            })
+            + "<LineString><altitudeMode>relativeToGround</altitudeMode>"
+            f"<coordinates>{_kml_coords(route_coords, plan.height_m)}</coordinates></LineString>"
+            "</Placemark>"
+        )
+
+        survey_lines = sortie.survey_tracks_geojson["coordinates"]
+        multi = "".join(
+            "<LineString><altitudeMode>relativeToGround</altitudeMode>"
+            f"<coordinates>{_kml_coords(line, plan.height_m)}</coordinates></LineString>"
+            for line in survey_lines
+        )
+        parts.append(f"<Placemark><name>Галсы</name><MultiGeometry>{multi}</MultiGeometry></Placemark>")
+
+        for kp in _key_points(sortie, projector):
+            lon, lat = kp["point"].x, kp["point"].y
+            parts.append(
+                f"<Placemark><name>{xml_escape(kp['label'])}</name>"
+                f"<TimeStamp><when>{_iso(kp['utc'])}</when></TimeStamp>"
+                + _kml_extended_data({
+                    "этап": kp["kind"], "speed_mps": round(plan.cruise_speed_mps, 2),
+                    "altitude_m": round(plan.height_m, 1),
+                })
+                + "<Point><altitudeMode>relativeToGround</altitudeMode>"
+                f"<coordinates>{lon:.7f},{lat:.7f},{plan.height_m:.1f}</coordinates></Point>"
+                "</Placemark>"
+            )
+        parts.append("</Folder>")
+    parts.append("</Folder></Document></kml>")
+    return "".join(parts)
 
 
 def to_zip(plan: PlanDetail) -> bytes:
-    """«Скачать все» (ЭКС.ФТ.7): KML и GeoJSON по каждому БВС группы."""
-    import json
+    """ЭКС.ФТ.7 «Скачать все» — архив с KML и GeoJSON по каждому БВС группы.
 
-    ids = uav_ids(plan)
-    if not ids:
-        raise ExportError("в плане нет ни одного вылета — выгружать нечего")
-
-    buffer = io.BytesIO()
-    # Детерминированный архив: без штампов времени файл, собранный дважды по
-    # одному плану, совпадает байт в байт — это то же свойство, на котором
-    # держится отказ хранить артефакты экспорта.
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        for current in ids:
-            info = zipfile.ZipInfo(filename_for(plan, current, "kml"), (1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(info, to_kml(plan, current))
-
-            info = zipfile.ZipInfo(filename_for(plan, current, "geojson"), (1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(
-                info,
-                json.dumps(to_geojson(plan, current), ensure_ascii=False, indent=2).encode("utf-8"),
-            )
-    return buffer.getvalue()
+    Штампы времени в записях зафиксированы: подтверждённый план неизменен
+    (ЭКС.ФТ.3), поэтому повторная сборка архива обязана давать тот же файл
+    байт в байт — иначе невозможно доказать, что выгрузили именно его.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for uav_id in sorted(_sorties_by_uav(plan)):
+            for name, content in (
+                (f"{uav_id}.kml", to_kml(plan, uav_id)),
+                (f"{uav_id}.geojson",
+                 json.dumps(to_geojson(plan, uav_id), ensure_ascii=False, indent=2)),
+            ):
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                zf.writestr(info, content)
+    return buf.getvalue()
 
 
 # --- операция экспорта (единственная часть модуля, знающая о хранилище) -----
 
+log = logging.getLogger(__name__)
 
-class ExportNotAllowedError(ValidationError):
-    """ЭКС.ФТ.7: выгружать можно только подтвержденный план."""
-
+KML_MEDIA_TYPE = "application/vnd.google-earth.kml+xml"
+GEOJSON_MEDIA_TYPE = "application/geo+json"
+ZIP_MEDIA_TYPE = "application/zip"
 
 EXPORTABLE_STATUSES = ("Подтвержден", "Выгружен")
 
 
-def export_plan(
-    plan_id: str, fmt: str, uav_id: str | None, user: str
-) -> tuple[bytes, str, str]:
+class ExportNotAllowedError(ValidationError):
+    """ЭКС.ФТ.7: выгружать можно только подтверждённый план."""
+
+
+def filename_for(plan: PlanDetail, uav_id: str | None, fmt: str) -> str:
+    if fmt == "zip":
+        return f"plan_v{plan.version}_export.zip"
+    return f"{uav_id}_v{plan.version}.{fmt}"
+
+
+def export_plan(plan_id: str, fmt: str, uav_id: str | None, user: str) -> tuple[bytes, str, str]:
     """Сформировать файл выгрузки и записать факт в журнал.
 
     Возвращает содержимое, имя файла и media type. Первая выгрузка переводит
     план в «Выгружен» (ЭКС.ФТ.5) — это делает репозиторий условным UPDATE.
+    Сами файлы нигде не хранятся: они чистая функция от неизменяемого плана,
+    журнал фиксирует только факт выгрузки.
     """
-    import json
-
     plan = repositories.plans.get(plan_id)
     if plan.status not in EXPORTABLE_STATUSES:
         raise ExportNotAllowedError(
@@ -411,11 +323,9 @@ def export_plan(
         )
 
     if fmt == "kml":
-        content, media_type = to_kml(plan, uav_id), KML_MEDIA_TYPE
+        content, media_type = to_kml(plan, uav_id).encode("utf-8"), KML_MEDIA_TYPE
     elif fmt == "geojson":
-        content = json.dumps(
-            to_geojson(plan, uav_id), ensure_ascii=False, indent=2
-        ).encode("utf-8")
+        content = json.dumps(to_geojson(plan, uav_id), ensure_ascii=False, indent=2).encode("utf-8")
         media_type = GEOJSON_MEDIA_TYPE
     elif fmt == "zip":
         content, media_type = to_zip(plan), ZIP_MEDIA_TYPE

@@ -22,7 +22,7 @@ from uav_planner.api.deps import current_user
 from uav_planner.api.schemas.job import JobAccepted
 from uav_planner.api.schemas.plan import PlanDetail, PlanSummary
 from uav_planner.config import get_settings
-from uav_planner.services import export_service, job_service, plan_service, task_service
+from uav_planner.services import safety_service, export_service, job_service, plan_service, task_service
 from uav_planner.services.export_service import ExportError, ExportNotAllowedError
 from uav_planner.services.plan_service import (
     PlanConfirmConflictError,
@@ -82,13 +82,37 @@ def get_plan(plan_id: str) -> PlanDetail:
 # --- модуль «Подтверждение и экспорт», ЭКС.ФТ.6-9 ---------------------------
 
 
+def _violations_overridden(plan_id: str) -> bool:
+    """Оператор отметил принятыми ВСЕ нарушения последнего отчёта — тогда план
+    подтверждается вопреки ЭКС.ФТ.2 (расширение по запросу пользователя).
+
+    Проверяется здесь, а не в ``plan_service``: только роутер видит сразу и
+    планирование, и проверку безопасности, и ставить между сервисами взаимный
+    импорт ради этого не стоит.
+    """
+    try:
+        report = safety_service.get_latest_report(plan_id)
+    except KeyError:
+        return False
+    return report.status == "Есть нарушения" and report.violations_acknowledged
+
+
 @router.post("/plans/{plan_id}/confirm", response_model=PlanSummary)
 def confirm_plan(
-    plan_id: str, user: Annotated[str, Depends(current_user)]
+    plan_id: str,
+    user: Annotated[str, Depends(current_user)],
+    confirmed_by: str | None = Form(default=None),
 ) -> PlanSummary:
-    """ЭКС.ФТ.6 «Подтвердить». 409 при конфликте — с именем подтвердившего."""
+    """ЭКС.ФТ.6 «Подтвердить». 409 при конфликте — с именем подтвердившего.
+
+    ФИО приходит полем формы; если его не прислали — берётся имя из заголовка
+    ``X-User-Name``, которым подписаны и правки задач, и только потом дефолт.
+    """
+    who = (confirmed_by or "").strip() or user
     try:
-        return plan_service.confirm_plan(plan_id, user)
+        return plan_service.confirm_plan(
+            plan_id, who, override_violations=_violations_overridden(plan_id)
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail="план не найден")
     except PlanNotConfirmableError as exc:
@@ -113,18 +137,23 @@ def _attachment(filename: str) -> str:
     return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(filename)}"
 
 
-@router.get("/plans/{plan_id}/export")
-def export_plan(
-    plan_id: str,
-    user: Annotated[str, Depends(current_user)],
-    format: Literal["kml", "geojson"] = Query(..., description="формат файла"),
-    uav_id: str | None = Query(default=None, description="БВС; без него — вся группа"),
+@router.get("/plans/{plan_id}/export/kml/{uav_id}")
+def export_plan_kml(
+    plan_id: str, uav_id: str, user: Annotated[str, Depends(current_user)]
 ) -> Response:
-    """ЭКС.ФТ.7-8: файл по одному БВС (или сводный по группе)."""
-    return _export_response(plan_id, format, uav_id, user)
+    """ЭКС.ФТ.7-8: KML по одному БВС."""
+    return _export_response(plan_id, "kml", uav_id, user)
 
 
-@router.get("/plans/{plan_id}/export/all")
+@router.get("/plans/{plan_id}/export/geojson/{uav_id}")
+def export_plan_geojson(
+    plan_id: str, uav_id: str, user: Annotated[str, Depends(current_user)]
+) -> Response:
+    """ЭКС.ФТ.7-8: GeoJSON по одному БВС."""
+    return _export_response(plan_id, "geojson", uav_id, user)
+
+
+@router.get("/plans/{plan_id}/export/zip")
 def export_plan_archive(
     plan_id: str, user: Annotated[str, Depends(current_user)]
 ) -> Response:

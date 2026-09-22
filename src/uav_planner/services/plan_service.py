@@ -603,16 +603,22 @@ def get_plan_summary(plan_id: str) -> PlanSummary:
     return _to_summary(repositories.plans.get(plan_id))
 
 
-def confirm_plan(plan_id: str, user: str) -> PlanSummary:
+def confirm_plan(plan_id: str, user: str, *, override_violations: bool = False) -> PlanSummary:
     """ЭКС.ФТ.6: ручное подтверждение плана оператором.
 
     Два условия, и они разной природы. Предусловие ЭКС.ФТ.2 — «последняя
     проверка безопасности выполнена и не содержит нарушений» — проверяется
-    чтением отчета: это правило предметной области, и его нарушение означает,
+    чтением отчёта: это правило предметной области, и его нарушение означает,
     что оператору вообще не следовало показывать кнопку. Само же изменение
-    статуса делается условным ``UPDATE ... WHERE status = 'Проверен'`` в
-    репозитории: это защита от гонки (ЭКС.ФТ.9), а не от неверного состояния,
-    и читать-проверять-писать здесь нельзя в принципе.
+    статуса делается условным ``UPDATE`` в репозитории: это защита от гонки
+    (ЭКС.ФТ.9), а не от неверного состояния, и читать-проверять-писать здесь
+    нельзя в принципе.
+
+    ``override_violations`` — оператор отметил принятыми все нарушения
+    последнего отчёта (расширение ЭКС.ФТ.2 по запросу пользователя). Тогда
+    требование «без нарушений» снимается, но остальные остаются: проверка
+    обязана быть выполнена и относиться именно к этой версии плана — иначе
+    принимался бы риск, которого никто не измерял.
     """
     plan = repositories.plans.get(plan_id)
     report = repositories.safety.latest_report(plan_id)
@@ -627,12 +633,13 @@ def confirm_plan(plan_id: str, user: str) -> PlanSummary:
             "план не подтверждается: последняя проверка относится к другой версии плана "
             f"(версия {plan.version} не проверялась)"
         )
-    if report.status != "Пройдена":
+    if report.status != "Пройдена" and not override_violations:
         raise PlanNotConfirmableError(
             "план не подтверждается: последняя проверка безопасности содержит нарушения"
         )
 
-    confirmed = repositories.plans.confirm(plan_id, user)
+    with_overrides = override_violations and report.status != "Пройдена"
+    confirmed = repositories.plans.confirm(plan_id, user, with_overrides=with_overrides)
     if confirmed is None:
         actual = repositories.plans.get(plan_id)
         log.warning(
@@ -640,8 +647,15 @@ def confirm_plan(plan_id: str, user: str) -> PlanSummary:
             extra={"plan_id": plan_id, "plan_status": actual.status, "user": user},
         )
         raise PlanConfirmConflictError(actual)
+
+    # ЭКС.ФТ.6: подтверждённый план фиксирует и задачу — править её параметры
+    # больше нельзя. Новый расчёт (mark_calculated) снова разблокирует.
+    task_service.mark_confirmed(confirmed.task_id)
     log.info(
         "статус плана изменен",
-        extra={"plan_id": plan_id, "plan_status": confirmed.status, "user": user},
+        extra={
+            "plan_id": plan_id, "plan_status": confirmed.status, "user": user,
+            "with_overrides": with_overrides,
+        },
     )
     return _to_summary(confirmed)

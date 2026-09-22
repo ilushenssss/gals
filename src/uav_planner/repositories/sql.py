@@ -184,23 +184,30 @@ class PlanRepository:
             .values(status="Проверен")
         )
 
-    def confirm(self, plan_id: str, user: str) -> PlanDetail | None:
+    def confirm(self, plan_id: str, user: str, *, with_overrides: bool = False) -> PlanDetail | None:
         """ЭКС.ФТ.6/ФТ.9: условное подтверждение. None — статус был не тот.
 
-        Именно условный ``UPDATE ... WHERE status = 'Проверен'``, а не «прочитать
+        Именно условный ``UPDATE ... WHERE status IN (...)``, а не «прочитать
         и записать»: при одновременном подтверждении двумя операторами выигрывает
         первый, второй обязан получить отказ с актуальным статусом и именем.
+
+        ``with_overrides`` — оператор принял все нарушения последнего отчёта,
+        и подтверждается план, не прошедший проверку. Допустимые исходные
+        статусы тогда шире, но условие остаётся условием: уже подтверждённый
+        или выгруженный план не подтверждается повторно ни при каких отметках.
         """
         key = _uuid_or_none(plan_id)
         if key is None:
             raise KeyError(plan_id)
+        allowed = ("Проверен", "Черновик") if with_overrides else ("Проверен",)
         updated = current_session().execute(
             update(Plan)
-            .where(Plan.id == key, Plan.status == "Проверен")
+            .where(Plan.id == key, Plan.status.in_(allowed))
             .values(
                 status="Подтвержден",
                 confirmed_at=datetime.now(timezone.utc),
                 confirmed_by=user,
+                confirmed_with_overrides=with_overrides,
             )
             .returning(Plan.id)
         ).scalar_one_or_none()
