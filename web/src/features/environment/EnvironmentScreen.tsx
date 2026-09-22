@@ -36,6 +36,34 @@ export function EnvironmentScreen() {
     [],
   )
 
+  const historyBlock = (
+    <div className="history">
+      <h3>Загруженные обстановки</h3>
+      <ul>
+        {(history.data ?? []).map((item) => (
+          <li key={item.id}>
+            <a
+              href={`/environments/${item.id}`}
+              onClick={(event) => {
+                event.preventDefault()
+                navigate(`/environments/${item.id}`)
+              }}
+            >
+              {item.name}
+            </a>
+          </li>
+        ))}
+      </ul>
+      <button
+        className="btn"
+        style={{ width: "100%", marginTop: 10 }}
+        onClick={() => setUploading(true)}
+      >
+        {detail ? "+ Загрузить ещё одну обстановку" : "+ Загрузить обстановку"}
+      </button>
+    </div>
+  )
+
   const sidebar = detail ? (
     <>
       <p className="sb-title">{detail.name}</p>
@@ -83,33 +111,22 @@ export function EnvironmentScreen() {
         </button>
       )}
 
-      <div className="history">
-        <h3>Загруженные обстановки</h3>
-        <ul>
-          {(history.data ?? []).map((item) => (
-            <li key={item.id}>
-              <a
-                href={`/environments/${item.id}`}
-                onClick={(event) => {
-                  event.preventDefault()
-                  navigate(`/environments/${item.id}`)
-                }}
-              >
-                {item.name}
-              </a>
-            </li>
-          ))}
-        </ul>
-        <button
-          className="btn"
-          style={{ width: "100%", marginTop: 10 }}
-          onClick={() => setUploading(true)}
-        >
-          + Загрузить ещё одну обстановку
-        </button>
-      </div>
+      {historyBlock}
     </>
-  ) : null
+  ) : (
+    // Обстановка не выбрана — но список уже загруженных всё равно нужен:
+    // иначе, вернувшись в сервис со свежей вкладки, оператор видит пустой
+    // экран и не может добраться до своих данных иначе как по прямой ссылке.
+    <>
+      <p className="sb-title">Обстановка</p>
+      <p className="sb-sub">
+        {history.data?.length
+          ? "Выберите обстановку из списка или загрузите новую."
+          : "Ни одной обстановки не загружено. Начните с файла GeoJSON."}
+      </p>
+      {historyBlock}
+    </>
+  )
 
   useStep(0, ok ? [0] : [], (index) => {
           if (index === 1 && ok && detail) navigate(`/environments/${detail.id}/tasks`)
