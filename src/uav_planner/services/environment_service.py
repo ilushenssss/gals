@@ -62,6 +62,14 @@ def _group_features(geojson: dict) -> dict[str, list[dict]]:
 def _validate_polygon_feature(layer: str, feature: dict) -> BaseGeometry:
     """ОБС.ФТ.2 (валидность) + ОБС.ФТ.4 (диапазоны). Бросает исключение при нарушении."""
     props = feature.get("properties") or {}
+    # Импорт из KML (см. uav_planner.kml.environment) сам помечает объекты,
+    # которые источник данных явно назвал некорректными ("Некорректная
+    # геометрия!" в примерных файлах кейса) — уважаем эту отметку так же, как
+    # собственную проверку валидности ниже, а не только полагаемся на то, что
+    # shapely сам поймает проблему (тонкое самопересечение может и не дать
+    # invalid по критериям OGC).
+    if props.get("_source_flagged_invalid"):
+        raise ValueError(f"источник данных отметил геометрию как некорректную: {props['_source_flagged_invalid']}")
     geom = shape(feature["geometry"])
     validate_polygon(geom)
     if layer in ("airspace", "obstacle"):

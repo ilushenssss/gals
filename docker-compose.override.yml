@@ -3,6 +3,18 @@
 # открыт наружу на нестандартном порту — чтобы можно было подключиться
 # psql и прогнать pytest с хоста, не конфликтуя с локальным PostgreSQL.
 # Если 8000 на машине уже занят — API_PORT=8001 docker compose up.
+#
+# PYTHONPATH=/app/src обязателен для api/worker/beat: Dockerfile ставит
+# uav-planner обычным (не editable) ``pip install .``, то есть в образе он
+# лежит копией в site-packages, а не как ссылка на /app/src. Без PYTHONPATH
+# `import uav_planner` резолвится в эту копию — смонтированный `./src` при
+# этом лежит рядом мертвым грузом, uvicorn --reload честно перезапускается
+# на правку файла, но перезапускается на ту же самую старую копию из
+# site-packages, и правка никогда не долетает до работающего кода (поймано
+# на живую: правка environments.py не меняла поведение запроса, пока не
+# нашли, что ``uav_planner.__file__`` вел в site-packages). PYTHONPATH ставит
+# смонтированный каталог первым в пути импорта — тогда --reload закрывает
+# ровно тот разрыв, для которого задуман.
 
 services:
   db:
@@ -22,6 +34,7 @@ services:
       - /app/src
     environment:
       GALS_ENV: dev
+      PYTHONPATH: /app/src
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
@@ -36,11 +49,13 @@ services:
   worker:
     environment:
       GALS_ENV: dev
+      PYTHONPATH: /app/src
     volumes:
       - ./src:/app/src
 
   beat:
     environment:
       GALS_ENV: dev
+      PYTHONPATH: /app/src
     volumes:
       - ./src:/app/src

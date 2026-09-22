@@ -1,4 +1,8 @@
-"""HTTP-маршруты модуля «Обстановка» — ОБС.ФТ.5, ОБС.ФТ.8-10."""
+"""HTTP-маршруты модуля «Обстановка» — ОБС.ФТ.5, ОБС.ФТ.8-10.
+
+Формат файла — GeoJSON FeatureCollection или KML (см.
+``uav_planner.kml.environment`` про то, какие именно виды KML распознаются
+и как они превращаются в тот же самый GeoJSON перед проверкой)."""
 
 from __future__ import annotations
 
@@ -6,10 +10,16 @@ import json
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from uav_planner.kml import kml_to_environment_geojson
 from uav_planner.services import environment_service as service
 from uav_planner.api.schemas.environment import EnvironmentDetail, EnvironmentSummary
 
 router = APIRouter(prefix="/api", tags=["environments"])
+
+
+def _looks_like_kml(raw: bytes) -> bool:
+    head = raw[:512].lstrip()
+    return head.startswith(b"<?xml") or head.startswith(b"<kml")
 
 
 @router.post("/environments", response_model=EnvironmentSummary)
@@ -18,10 +28,16 @@ async def upload_environment(
     file: UploadFile = File(...),
 ) -> EnvironmentSummary:
     raw = await file.read()
-    try:
-        geojson = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail=f"файл не является корректным JSON: {exc}") from exc
+    if _looks_like_kml(raw):
+        try:
+            geojson = kml_to_environment_geojson(raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"не удалось разобрать KML-файл: {exc}") from exc
+    else:
+        try:
+            geojson = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"файл не является корректным JSON: {exc}") from exc
 
     try:
         return service.validate_and_store(geojson, name)
