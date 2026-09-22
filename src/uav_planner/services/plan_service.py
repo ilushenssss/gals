@@ -55,7 +55,7 @@ from uav_planner.geometry import (
 )
 from uav_planner.jobs.progress import SCHEDULE_SPAN, TRACKS_SPAN, ProgressReporter
 from uav_planner.logging_setup import log_context
-from uav_planner.routing import Track, Vehicle, greedy_assign_and_split
+from uav_planner.routing.greedy import Track, Vehicle, greedy_assign_and_split
 from uav_planner.schedule import ScheduleError, assign_timestamps
 
 from . import fleet_service

@@ -1,7 +1,7 @@
 import pytest
 from shapely.geometry import LineString
 
-from uav_planner.routing import Track, Vehicle, greedy_assign_and_split
+from uav_planner.routing.greedy import Track, Vehicle, greedy_assign_and_split
 
 
 def track(id_, length_m):

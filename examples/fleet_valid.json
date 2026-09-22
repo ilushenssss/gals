@@ -1,9 +1,9 @@
 [
-  { "inventory_number": "201-01", "model": "geoscan-201", "status": "Готов", "base_launch_site": "ВПП Северная" },
-  { "inventory_number": "201-02", "model": "geoscan-201", "status": "На обслуживании", "base_launch_site": "ВПП Южная" },
-  { "inventory_number": "GEM-01", "model": "geoscan-gemini", "status": "Готов", "base_launch_site": "ВПП Северная" },
-  { "inventory_number": "GEM-02", "model": "geoscan-gemini", "status": "Готов", "base_launch_site": "ВПП Южная" },
-  { "inventory_number": "GEM-03", "model": "geoscan-gemini", "status": "Недоступен", "base_launch_site": "ВПП Северная" },
-  { "inventory_number": "801-01", "model": "geoscan-801", "status": "Готов", "base_launch_site": "ВПП Южная" },
-  { "inventory_number": "801-02", "model": "geoscan-801", "status": "Готов", "base_launch_site": "ВПП Северная" }
+  { "inventory_number": "201-01", "model": "geoscan-201", "status": "Готов", "base_launch_site": "ВПП Северная", "location_lat": 55.775, "location_lon": 37.60 },
+  { "inventory_number": "201-02", "model": "geoscan-201", "status": "На обслуживании", "base_launch_site": "ВПП Южная", "location_lat": 55.725, "location_lon": 37.58 },
+  { "inventory_number": "GEM-01", "model": "geoscan-gemini", "status": "Готов", "base_launch_site": "ВПП Северная", "location_lat": 55.775, "location_lon": 37.60 },
+  { "inventory_number": "GEM-02", "model": "geoscan-gemini", "status": "Готов", "base_launch_site": "ВПП Южная", "location_lat": 55.725, "location_lon": 37.58 },
+  { "inventory_number": "GEM-03", "model": "geoscan-gemini", "status": "Недоступен", "base_launch_site": "ВПП Северная", "location_lat": 55.775, "location_lon": 37.60 },
+  { "inventory_number": "801-01", "model": "geoscan-801", "status": "Готов", "base_launch_site": "ВПП Южная", "location_lat": 55.725, "location_lon": 37.58 },
+  { "inventory_number": "801-02", "model": "geoscan-801", "status": "Готов", "base_launch_site": "ВПП Северная", "location_lat": 55.775, "location_lon": 37.60 }
 ]

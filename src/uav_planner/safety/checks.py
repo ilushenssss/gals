@@ -28,10 +28,21 @@ _VIOLATION_LIMIT = 5
 
 
 @dataclass(frozen=True)
+class Violation:
+    """Одно нарушение — текст причины и, где это осмысленно, точка на карте
+    («опасный момент», в метрах UTM), чтобы интерфейс мог показать ее на
+    карте и подсветить именно эту строку при наведении (см. static/index.html,
+    Экран 5)."""
+
+    message: str
+    point: Point | None = None
+
+
+@dataclass(frozen=True)
 class CheckResult:
     name: str
     passed: bool
-    violations: tuple[str, ...] = ()
+    violations: tuple[Violation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -45,11 +56,13 @@ class SortieTrack:
     cruise_speed_mps: float
 
 
-def _finalize(name: str, violations: list[str], limit: int = _VIOLATION_LIMIT) -> CheckResult:
-    unique = list(dict.fromkeys(violations))
-    shown = unique[:limit]
+def _finalize(name: str, violations: list[Violation], limit: int = _VIOLATION_LIMIT) -> CheckResult:
+    unique: dict[str, Violation] = {}
+    for v in violations:
+        unique.setdefault(v.message, v)
+    shown = list(unique.values())[:limit]
     if len(unique) > limit:
-        shown.append(f"...и еще {len(unique) - limit} нарушени(й)")
+        shown.append(Violation(f"...и еще {len(unique) - limit} нарушени(й)"))
     return CheckResult(name=name, passed=not violations, violations=tuple(shown))
 
 
@@ -69,15 +82,19 @@ def check_geozones(
     step_m: float = DEFAULT_STEP_M,
 ) -> CheckResult:
     """Траектория не пересекает бесполетные зоны и высотные препятствия."""
-    violations: list[str] = []
+    violations: list[Violation] = []
     for point in discretize(route, step_m):
         for zone in no_fly_footprints:
             if zone.intersects(point):
-                violations.append(f"маршрут пересекает бесполетную зону в точке ({point.x:.0f}, {point.y:.0f})")
+                violations.append(Violation(
+                    f"маршрут пересекает бесполетную зону в точке ({point.x:.0f}, {point.y:.0f})", point
+                ))
                 break
         for obstacle in obstacle_footprints:
             if obstacle.intersects(point):
-                violations.append(f"маршрут пересекает высотное препятствие в точке ({point.x:.0f}, {point.y:.0f})")
+                violations.append(Violation(
+                    f"маршрут пересекает высотное препятствие в точке ({point.x:.0f}, {point.y:.0f})", point
+                ))
                 break
     return _finalize("geozones", violations)
 
@@ -88,23 +105,40 @@ def check_allowed_space(
     step_m: float = DEFAULT_STEP_M,
 ) -> CheckResult:
     """Траектория находится внутри разрешенного воздушного пространства."""
-    violations: list[str] = []
+    violations: list[Violation] = []
     for point in discretize(route, step_m):
         if not allowed_union.covers(point):
-            violations.append(f"точка ({point.x:.0f}, {point.y:.0f}) вне разрешенного воздушного пространства")
+            violations.append(Violation(
+                f"точка ({point.x:.0f}, {point.y:.0f}) вне разрешенного воздушного пространства", point
+            ))
     return _finalize("airspace", violations)
 
 
-def check_energy(route_length_m: float, cruise_speed_mps: float, budget_s: float) -> CheckResult:
+def check_energy(
+    route_length_m: float, cruise_speed_mps: float, budget_s: float, route: BaseGeometry | None = None
+) -> CheckResult:
     """Фактическое время вылета (маршрут целиком, включая переходы) не
     превышает энергобюджет — независимая проверка того, что заложено в
-    ``routing`` (который считает бюджет только по галсам, без переходов)."""
+    ``routing``/``plan_service``: те тоже учитывают переходы при подборе
+    галсов и налете (``routing.cluster_assign_and_route``,
+    ``plan_service._build_sortie_legs``), но при кластеризации/маршрутизации
+    переходы оцениваются по прямой, а не по фактическому маршруту в обход
+    зон — обход (``visibility.find_path``) обычно чуть длиннее прямой, и в
+    редких случаях это может вытолкнуть уже собранный вылет за бюджет уже
+    после того, как Split счел его допустимым. Эта проверка сверяет именно
+    фактический, а не оценочный маршрут — узнать реальный расход энергии.
+    ``route`` — опционально, только чтобы отметить на карте точку «здесь
+    закончится энергобюджет» (маршрут при этом не изменяется)."""
     required_s = route_length_m / cruise_speed_mps
     if required_s > budget_s:
         deficit_s = required_s - budget_s
+        point = route.interpolate(min(budget_s * cruise_speed_mps, route.length)) if route is not None else None
         return CheckResult("energy", False, (
-            f"фактическое время вылета с учетом переходов ({required_s / 60:.1f} мин) "
-            f"превышает бюджет ({budget_s / 60:.1f} мин) на {deficit_s / 60:.1f} мин",
+            Violation(
+                f"фактическое время вылета с учетом переходов ({required_s / 60:.1f} мин) "
+                f"превышает бюджет ({budget_s / 60:.1f} мин) на {deficit_s / 60:.1f} мин",
+                point,
+            ),
         ))
     return CheckResult("energy", True)
 
@@ -119,20 +153,23 @@ def check_reachability(
     """Из любой точки маршрута достижима хотя бы одна площадка посадки с
     учетом остатка энергобюджета в этой точке."""
     if not landing_points:
-        return CheckResult("reachability", False, ("нет ни одной площадки посадки или резервной площадки",))
+        return CheckResult("reachability", False, (
+            Violation("нет ни одной площадки посадки или резервной площадки", Point(route.coords[0])),
+        ))
 
-    violations: list[str] = []
+    violations: list[Violation] = []
     for point in discretize(route, step_m):
         elapsed_s = route.project(point) / cruise_speed_mps
         remaining_s = budget_s - elapsed_s
         nearest_m = min(point.distance(site) for site in landing_points)
         time_to_site_s = nearest_m / cruise_speed_mps
         if remaining_s < time_to_site_s:
-            violations.append(
+            violations.append(Violation(
                 f"на {route.project(point):.0f} м маршрута остатка ресурса "
                 f"({remaining_s / 60:.1f} мин) не хватит на долет до ближайшей площадки "
-                f"({time_to_site_s / 60:.1f} мин)"
-            )
+                f"({time_to_site_s / 60:.1f} мин)",
+                point,
+            ))
     return _finalize("reachability", violations)
 
 
@@ -147,10 +184,15 @@ def check_coverage(
         return CheckResult("coverage", True)
 
     covered = unary_union([t.buffer(swath_m / 2) for t in survey_tracks]) if survey_tracks else Polygon()
-    uncovered_fraction = working_area.difference(covered).area / working_area.area
+    uncovered = working_area.difference(covered)
+    uncovered_fraction = uncovered.area / working_area.area
     if uncovered_fraction > tolerance:
+        point = uncovered.representative_point() if not uncovered.is_empty else None
         return CheckResult("coverage", False, (
-            f"не покрыто {uncovered_fraction * 100:.1f}% рабочей области (допуск {tolerance * 100:.0f}%)",
+            Violation(
+                f"не покрыто {uncovered_fraction * 100:.1f}% рабочей области (допуск {tolerance * 100:.0f}%)",
+                point,
+            ),
         ))
     return CheckResult("coverage", True)
 
@@ -162,11 +204,16 @@ def check_daylight(
     lon: float,
     window_start_hour: float = 0.0,
     window_end_hour: float = 24.0,
+    location: Point | None = None,
 ) -> CheckResult:
-    """Вылет укладывается в световой день для даты и координат задачи."""
+    """Вылет укладывается в световой день для даты и координат задачи.
+    ``location`` — опционально, точка вылета в UTM, только для отметки на
+    карте (нарушение здесь привязано ко всему вылету, а не к точке маршрута)."""
     window = daylight_window_utc_hours(lat, lon, start_utc.date())
     if window is None:
-        return CheckResult("daylight", False, ("полярная ночь на дату вылета — светового дня нет",))
+        return CheckResult("daylight", False, (
+            Violation("полярная ночь на дату вылета — светового дня нет", location),
+        ))
 
     day_start_h = max(window_start_hour, window[0])
     day_end_h = min(window_end_hour, window[1])
@@ -176,8 +223,11 @@ def check_daylight(
 
     if start_utc < win_start or end_utc > win_end:
         return CheckResult("daylight", False, (
-            f"вылет {start_utc.isoformat()}–{end_utc.isoformat()} выходит за пределы "
-            f"светового дня {win_start.isoformat()}–{win_end.isoformat()}",
+            Violation(
+                f"вылет {start_utc.isoformat()}–{end_utc.isoformat()} выходит за пределы "
+                f"светового дня {win_start.isoformat()}–{win_end.isoformat()}",
+                location,
+            ),
         ))
     return CheckResult("daylight", True)
 
@@ -194,7 +244,7 @@ def check_separation(
 ) -> CheckResult:
     """Нет сближений разных БВС на одной высоте (в v1 — единой для всего
     плана) ближе ``min_separation_m`` в перекрывающиеся по времени интервалы."""
-    violations: list[str] = []
+    violations: list[Violation] = []
     for i in range(len(sorties)):
         for j in range(i + 1, len(sorties)):
             a, b = sorties[i], sorties[j]
@@ -211,10 +261,12 @@ def check_separation(
                 pb = _position_at(b.route, (t - b.start_utc).total_seconds(), b.cruise_speed_mps)
                 distance = pa.distance(pb)
                 if distance < min_separation_m:
-                    violations.append(
+                    midpoint = Point((pa.x + pb.x) / 2, (pa.y + pb.y) / 2)
+                    violations.append(Violation(
                         f"{a.uav_id} и {b.uav_id} сближаются до {distance:.0f} м "
-                        f"(порог {min_separation_m:.0f} м) около {t.isoformat()}"
-                    )
+                        f"(порог {min_separation_m:.0f} м) около {t.isoformat()}",
+                        midpoint,
+                    ))
                     break
                 t += timedelta(seconds=time_step_s)
     return _finalize("separation", violations)

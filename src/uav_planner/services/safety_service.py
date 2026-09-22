@@ -92,7 +92,12 @@ def sortie_label(sortie) -> str:
 def _combine(name: str, results: list[tuple[str | None, CheckResult]]) -> SafetyCheckOut:
     violations: list[str] = []
     for label, r in results:
-        violations.extend(f"{label}: {v}" if label else v for v in r.violations)
+        # Проверки ядра отдают Violation(message, point); точка понадобится на
+        # шаге 5 слияния (структурный ViolationOut с координатами для карты),
+        # здесь пока берётся только текст.
+        violations.extend(
+            f"{label}: {v.message}" if label else v.message for v in r.violations
+        )
     unique = list(dict.fromkeys(violations))
     shown = unique[:5]
     if len(unique) > 5:
@@ -209,9 +214,9 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         _combine("airspace", airspace_results),
         _combine("energy", energy_results),
         _combine("reachability", reachability_results),
-        SafetyCheckOut(name="coverage", label=_LABELS["coverage"], passed=coverage_result.passed, violations=list(coverage_result.violations)),
+        SafetyCheckOut(name="coverage", label=_LABELS["coverage"], passed=coverage_result.passed, violations=[v.message for v in coverage_result.violations]),
         _combine("daylight", daylight_results),
-        SafetyCheckOut(name="separation", label=_LABELS["separation"], passed=separation_result.passed, violations=list(separation_result.violations)),
+        SafetyCheckOut(name="separation", label=_LABELS["separation"], passed=separation_result.passed, violations=[v.message for v in separation_result.violations]),
     ]
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
-from uav_planner.routing.greedy import Sortie
+from uav_planner.routing.cluster import Sortie
 
 from .daylight import daylight_window_utc_hours
 

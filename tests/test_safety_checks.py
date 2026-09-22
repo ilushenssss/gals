@@ -44,7 +44,8 @@ def test_geozones_fails_when_crossing_no_fly():
     no_fly = box(40, -10, 60, 10)
     result = check_geozones(route, no_fly_footprints=[no_fly], obstacle_footprints=[])
     assert not result.passed
-    assert "бесполетную зону" in result.violations[0]
+    assert "бесполетную зону" in result.violations[0].message
+    assert result.violations[0].point is not None
 
 
 def test_geozones_fails_when_crossing_obstacle():
@@ -52,7 +53,7 @@ def test_geozones_fails_when_crossing_obstacle():
     obstacle = box(40, -10, 60, 10)
     result = check_geozones(route, no_fly_footprints=[], obstacle_footprints=[obstacle])
     assert not result.passed
-    assert "препятствие" in result.violations[0]
+    assert "препятствие" in result.violations[0].message
 
 
 # ---------- check_allowed_space ----------
@@ -85,7 +86,12 @@ def test_energy_fails_when_transit_pushes_over_budget():
     # добавляем "переходы", увеличивающие маршрут -> не проходит.
     bad = check_energy(route_length_m=1500, cruise_speed_mps=10, budget_s=100)
     assert not bad.passed
-    assert "мин" in bad.violations[0]
+    assert "мин" in bad.violations[0].message
+    assert bad.violations[0].point is None  # без переданного route точку не строим
+
+    route = LineString([(0, 0), (1500, 0)])
+    bad_with_route = check_energy(route_length_m=1500, cruise_speed_mps=10, budget_s=100, route=route)
+    assert bad_with_route.violations[0].point == Point(1000, 0)  # 10 м/с * 100с бюджета
 
 
 # ---------- check_reachability ----------
@@ -123,7 +129,8 @@ def test_coverage_fails_when_gap_left():
     tracks = [LineString([(0, 5), (100, 5)])]  # покрывает только узкую полосу
     result = check_coverage(tracks, working_area, swath_m=10)
     assert not result.passed
-    assert "не покрыто" in result.violations[0]
+    assert "не покрыто" in result.violations[0].message
+    assert result.violations[0].point is not None
 
 
 def test_coverage_passes_for_empty_working_area():
@@ -153,7 +160,7 @@ def test_daylight_fails_on_polar_night():
     end = start + timedelta(hours=1)
     result = check_daylight(start, end, lat=78.0, lon=15.0)
     assert not result.passed
-    assert "полярная ночь" in result.violations[0]
+    assert "полярная ночь" in result.violations[0].message
 
 
 # ---------- check_separation ----------
@@ -176,7 +183,8 @@ def test_separation_fails_when_close_and_overlapping_in_time():
     ]
     result = check_separation(sorties, min_separation_m=50)
     assert not result.passed
-    assert "A" in result.violations[0] and "B" in result.violations[0]
+    assert "A" in result.violations[0].message and "B" in result.violations[0].message
+    assert result.violations[0].point is not None
 
 
 def test_separation_passes_when_not_overlapping_in_time():
