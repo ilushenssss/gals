@@ -250,9 +250,9 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     <form id="upload-form">
       <label for="f-name">Наименование</label>
       <input type="text" id="f-name" name="name" required placeholder="Например, «Тестовая сцена 1»">
-      <label for="f-file">Файл обстановки (GeoJSON)</label>
-      <input type="file" id="f-file" name="file" accept=".geojson,.json,application/geo+json,application/json" required>
-      <p class="hint">FeatureCollection со свойством <code>layer</code> у каждого объекта: <code>launch_site</code>, <code>airspace</code>, <code>no_fly</code>, <code>obstacle</code>, <code>reserve_site</code>.</p>
+      <label for="f-file">Файл обстановки (GeoJSON или KML)</label>
+      <input type="file" id="f-file" name="file" accept=".geojson,.json,.kml,application/geo+json,application/json,application/vnd.google-earth.kml+xml" required>
+      <p class="hint">GeoJSON — FeatureCollection со свойством <code>layer</code> у каждого объекта: <code>launch_site</code>, <code>airspace</code>, <code>no_fly</code>, <code>obstacle</code>, <code>reserve_site</code>. KML — зоны ограничений (высота и релевантность БВС определяются автоматически) и высотные препятствия (экструдированные 3D-объекты).</p>
       <p class="error" id="upload-error" hidden></p>
       <div class="actions">
         <button type="button" class="btn" id="btn-cancel">Отмена</button>
