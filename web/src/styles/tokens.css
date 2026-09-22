@@ -245,3 +245,16 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 .sidebar:empty{display:none}
 .legend-slot:empty{display:none}
 .launch-overlay:empty{display:none}
+
+/* Принятие риска по нарушению: галочка внутри строки нарушения. Принятое
+   меркнет, но остаётся на виду — риск принят, а не устранён. */
+.violation{display:flex;align-items:flex-start;gap:7px;cursor:pointer}
+.violation input{margin:2px 0 0;flex:none}
+.violation input:checked + span{opacity:.55;text-decoration:line-through}
+.violation input:disabled{cursor:default}
+.violation input:disabled + span{cursor:default}
+
+/* Этапы вылета в расписании (ИНТ.ФТ.15): строка вылета раскрывается по клику. */
+.schedule tr.expandable{cursor:pointer}
+.schedule tr.phase td{color:var(--muted);font-size:11px;padding-top:2px;padding-bottom:2px}
+.schedule tr.phase td:first-child{padding-left:14px}

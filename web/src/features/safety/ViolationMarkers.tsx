@@ -1,68 +1,50 @@
 /**
  * Маркеры нарушений на карте (ИНТ.ФТ.14).
  *
- * Нарушение адресуется вылетом: оркестратор проверки приписывает каждому
- * сообщению подпись «{БВС} · вылет {N}» (БЕЗ.ФТ.4), по ней и находится
- * маршрут. Точки у нарушения пока нет — проверки возвращают причину, но не
- * координату, — поэтому маркер ставится в начало маршрута, а тултип
- * показывает все причины по этому вылету. Когда проверки начнут возвращать
- * точку, поменяется только источник координаты.
+ * Нарушение само несёт координату «опасного момента» (`lat`/`lon`) — маркер
+ * ставится именно туда, а не в начало маршрута вылета, как раньше, когда
+ * проверки возвращали только текст и адрес приходилось выводить из подписи
+ * «{БВС} · вылет N» разбором строки.
+ *
+ * Нарушения без точки (сводная строка «...и ещё N», доля непокрытой области)
+ * на карте не показываются: у них нет осмысленного единственного места.
+ * Принятые оператором нарушения меркнут, но не исчезают — риск принят, а не
+ * устранён, и он должен оставаться на виду.
  */
 import L from "leaflet"
 import { useEffect } from "react"
-import type { PlanDetail, SafetyReport } from "@/api/client"
+import type { SafetyReport } from "@/api/client"
 import { PANES } from "@/map/MapProvider"
 import { useLayerGroup } from "@/map/useLayerGroup"
 
-export function ViolationMarkers({
-  plan,
-  report,
-}: {
-  plan: PlanDetail | null
-  report: SafetyReport | null
-}) {
+export function ViolationMarkers({ report }: { report: SafetyReport | null }) {
   const group = useLayerGroup()
 
   useEffect(() => {
     if (!group) return
     group.clearLayers()
-    if (!plan || !report || report.status === "Пройдена") return
+    if (!report || report.status === "Пройдена") return
 
-    const byUav = new Map<string, string[]>()
     for (const check of report.checks) {
       if (check.passed) continue
       for (const violation of check.violations) {
-        for (const sortie of plan.sorties) {
-          const label = `${sortie.uav_id} · вылет ${sortie.sortie_index + 1}`
-          if (!violation.startsWith(`${label}:`)) continue
-          const key = `${sortie.uav_id}#${sortie.sortie_index}`
-          const reason = `${check.label}: ${violation.slice(label.length + 1).trim()}`
-          byUav.set(key, [...(byUav.get(key) ?? []), reason])
-        }
+        if (violation.lat == null || violation.lon == null) continue
+        const marker = L.circleMarker([violation.lat, violation.lon], {
+          pane: PANES.markers.name,
+          radius: 9,
+          color: "#fff",
+          weight: 2,
+          fillColor: "#c62828",
+          fillOpacity: violation.ignored ? 0.35 : 1,
+        })
+        marker.bindTooltip(
+          `<b>${check.label}</b><br>${violation.message}` +
+            (violation.ignored ? "<br><i>риск принят оператором</i>" : ""),
+        )
+        group.addLayer(marker)
       }
     }
-
-    for (const sortie of plan.sorties) {
-      const key = `${sortie.uav_id}#${sortie.sortie_index}`
-      const reasons = byUav.get(key)
-      if (!reasons?.length) continue
-      const coords = (sortie.track_geojson as { coordinates?: number[][] }).coordinates
-      const first = coords?.[0]
-      if (!first) continue
-      const marker = L.circleMarker([first[1]!, first[0]!], {
-        pane: PANES.markers.name,
-        radius: 9,
-        color: "#fff",
-        weight: 2,
-        fillColor: "#c62828",
-        fillOpacity: 1,
-      })
-      marker.bindTooltip(
-        `<b>${sortie.uav_id} · вылет ${sortie.sortie_index + 1}</b><br>${reasons.join("<br>")}`,
-      )
-      group.addLayer(marker)
-    }
-  }, [plan, report, group])
+  }, [report, group])
 
   return null
 }

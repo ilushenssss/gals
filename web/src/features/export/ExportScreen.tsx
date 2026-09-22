@@ -8,9 +8,17 @@
  * файлов кириллические и приходят в `Content-Disposition` по RFC 5987, blob
  * заставил бы придумывать имя на клиенте и терять его.
  */
+import { useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ApiError, api, exportAllUrl, exportUrl } from "@/api/client"
+import {
+  ApiError,
+  DEFAULT_USER_NAME,
+  api,
+  exportAllUrl,
+  exportUrl,
+  getUserName,
+} from "@/api/client"
 import { LegendSlot, Sidebar, useStep } from "@/app/AppShell"
 import { EnvironmentLayers } from "@/map/EnvironmentLayers"
 import { PlanRoutes, UavLegend } from "@/map/PlanRoutes"
@@ -53,8 +61,10 @@ export function ExportScreen() {
     enabled: Boolean(planId),
   })
 
+  const [confirmedBy, setConfirmedBy] = useState(getUserName())
+
   const confirm = useMutation({
-    mutationFn: () => api.confirmPlan(planId!),
+    mutationFn: () => api.confirmPlan(planId!, confirmedBy.trim() || undefined),
     onSuccess: (summary) => {
       queryClient.invalidateQueries({ queryKey: ["plan", planId] })
       queryClient.invalidateQueries({ queryKey: ["plans", taskId] })
@@ -71,7 +81,12 @@ export function ExportScreen() {
   })
 
   const detail = plan.data ?? null
-  const passed = report.data?.status === "Пройдена" && report.data.plan_id === planId
+  const reportIsAboutThisPlan = report.data?.plan_id === planId
+  const passed = report.data?.status === "Пройдена" && reportIsAboutThisPlan
+  // Расширение ЭКС.ФТ.2: план с нарушениями подтверждается, если оператор
+  // отметил принятыми все нарушения последнего отчёта.
+  const overridden = Boolean(report.data?.violations_acknowledged) && reportIsAboutThisPlan
+  const confirmable = passed || overridden
   const confirmed = detail?.status === "Подтвержден" || detail?.status === "Выгружен"
   const uavIds = detail ? [...new Set(detail.sorties.map((s) => s.uav_id))] : []
 
@@ -104,21 +119,42 @@ export function ExportScreen() {
               ? new Date(detail.confirmed_at).toLocaleString("ru-RU")
               : "—"}
           </dd>
+          {detail.confirmed_with_overrides ? (
+            <>
+              <dt>Особо</dt>
+              <dd>подтверждён вопреки нарушениям</dd>
+            </>
+          ) : null}
         </dl>
       ) : null}
 
       {!confirmed ? (
         <>
-          {!passed ? (
+          {!confirmable ? (
             <div className="warning-box">
               Подтверждение доступно только для плана, прошедшего проверку безопасности без
-              нарушений (ЭКС.ФТ.2).
+              нарушений (ЭКС.ФТ.2). Либо отметьте на экране проверки каждое нарушение как
+              принятое — тогда подтверждение разблокируется под ответственность оператора.
             </div>
           ) : null}
+          {overridden && !passed ? (
+            <div className="warning-box">
+              План не прошёл проверку, но все нарушения отмечены принятыми. Подтверждение
+              будет зафиксировано как принятое вопреки нарушениям.
+            </div>
+          ) : null}
+          <label htmlFor="confirmed-by">ФИО подтверждающего</label>
+          <input
+            type="text"
+            id="confirmed-by"
+            value={confirmedBy}
+            onChange={(event) => setConfirmedBy(event.target.value)}
+            placeholder={DEFAULT_USER_NAME}
+          />
           <button
             className="btn primary"
             style={{ width: "100%" }}
-            disabled={!passed || confirm.isPending}
+            disabled={!confirmable || confirm.isPending}
             onClick={() => confirm.mutate()}
           >
             {confirm.isPending ? "Подтверждение…" : "Подтвердить"}

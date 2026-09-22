@@ -23,6 +23,8 @@ export type PlanDetail = S["PlanDetail"]
 export type PlanSortie = S["PlanSortie"]
 export type SafetyReport = S["SafetyReport"]
 export type SafetyCheckOut = S["SafetyCheckOut"]
+export type Violation = S["ViolationOut"]
+export type PlanSortiePhase = S["PlanSortiePhase"]
 export type JobInfo = S["JobInfo"]
 
 export const USER_NAME_KEY = "gals.userName"
@@ -146,17 +148,23 @@ export const api = {
     }),
 
   // --- парк БВС (ПБС) -------------------------------------------------------
-  getFleet: async (): Promise<FleetDetail | null> => {
+  // Парков несколько, каждый именованный и со своей локацией: «текущего»
+  // парка больше нет, задача называет свой.
+  listFleets: () => request<FleetSummary[]>("/api/fleets"),
+  getFleet: async (id: string): Promise<FleetDetail | null> => {
     try {
-      return await request<FleetDetail>("/api/fleet")
+      return await request<FleetDetail>(`/api/fleets/${id}`)
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) return null
       throw error
     }
   },
-  listModels: () => request<ModelSpec[]>("/api/fleet/models"),
-  uploadFleet: (file: File) =>
-    request<FleetSummary>("/api/fleet", { method: "POST", body: toFormData({ file }) }),
+  listModels: () => request<ModelSpec[]>("/api/fleets/models"),
+  uploadFleet: (name: string, file: File, locationName?: string) =>
+    request<FleetSummary>("/api/fleets", {
+      method: "POST",
+      body: toFormData({ name, location_name: locationName, file }),
+    }),
 
   // --- задача (ЗАД) ---------------------------------------------------------
   listTasks: (environmentId?: string) =>
@@ -228,9 +236,20 @@ export const api = {
     }
   },
 
+  ignoreViolation: (reportId: string, violationId: string, ignored: boolean) =>
+    request<SafetyReport>(
+      `/api/safety-checks/${reportId}/violations/${encodeURIComponent(violationId)}/ignore`,
+      { method: "POST", body: toFormData({ ignored }) },
+    ),
+
   // --- подтверждение и экспорт (ЭКС) ----------------------------------------
-  confirmPlan: (id: string) =>
-    request<PlanSummary>(`/api/plans/${id}/confirm`, { method: "POST" }),
+  // ФИО уходит полем формы: это контракт модуля. Заголовок X-User-Name
+  // уходит тоже и служит запасным путём на стороне сервера.
+  confirmPlan: (id: string, confirmedBy?: string) =>
+    request<PlanSummary>(`/api/plans/${id}/confirm`, {
+      method: "POST",
+      body: toFormData({ confirmed_by: confirmedBy }),
+    }),
 }
 
 /**
@@ -241,12 +260,10 @@ export const api = {
  * имя файла, тогда как blob-путь заставил бы придумывать имя на клиенте.
  * Имя оператора уходит запросом, поэтому оно в query, а не в заголовке.
  */
-export function exportUrl(planId: string, format: "kml" | "geojson", uavId?: string): string {
-  const params = new URLSearchParams({ format })
-  if (uavId) params.set("uav_id", uavId)
-  return `/api/plans/${planId}/export?${params}`
+export function exportUrl(planId: string, format: "kml" | "geojson", uavId: string): string {
+  return `/api/plans/${planId}/export/${format}/${encodeURIComponent(uavId)}`
 }
 
 export function exportAllUrl(planId: string): string {
-  return `/api/plans/${planId}/export/all`
+  return `/api/plans/${planId}/export/zip`
 }

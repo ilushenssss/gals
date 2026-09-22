@@ -39,25 +39,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/fleet": {
+    "/api/fleets": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Fleet */
-        get: operations["get_fleet_api_fleet_get"];
+        /** List Fleets */
+        get: operations["list_fleets_api_fleets_get"];
         put?: never;
-        /** Upload Fleet */
-        post: operations["upload_fleet_api_fleet_post"];
+        /** Create Fleet */
+        post: operations["create_fleet_api_fleets_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/fleet/models": {
+    "/api/fleets/models": {
         parameters: {
             query?: never;
             header?: never;
@@ -65,7 +65,24 @@ export interface paths {
             cookie?: never;
         };
         /** Get Fleet Models */
-        get: operations["get_fleet_models_api_fleet_models_get"];
+        get: operations["get_fleet_models_api_fleets_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fleets/{fleet_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Fleet */
+        get: operations["get_fleet_api_fleets__fleet_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -210,6 +227,9 @@ export interface paths {
         /**
          * Confirm Plan
          * @description ЭКС.ФТ.6 «Подтвердить». 409 при конфликте — с именем подтвердившего.
+         *
+         *     ФИО приходит полем формы; если его не прислали — берётся имя из заголовка
+         *     ``X-User-Name``, которым подписаны и правки задач, и только потом дефолт.
          */
         post: operations["confirm_plan_api_plans__plan_id__confirm_post"];
         delete?: never;
@@ -218,7 +238,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/plans/{plan_id}/export": {
+    "/api/plans/{plan_id}/export/geojson/{uav_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -226,10 +246,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Export Plan
-         * @description ЭКС.ФТ.7-8: файл по одному БВС (или сводный по группе).
+         * Export Plan Geojson
+         * @description ЭКС.ФТ.7-8: GeoJSON по одному БВС.
          */
-        get: operations["export_plan_api_plans__plan_id__export_get"];
+        get: operations["export_plan_geojson_api_plans__plan_id__export_geojson__uav_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -238,7 +258,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/plans/{plan_id}/export/all": {
+    "/api/plans/{plan_id}/export/kml/{uav_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Plan Kml
+         * @description ЭКС.ФТ.7-8: KML по одному БВС.
+         */
+        get: operations["export_plan_kml_api_plans__plan_id__export_kml__uav_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plans/{plan_id}/export/zip": {
         parameters: {
             query?: never;
             header?: never;
@@ -249,7 +289,7 @@ export interface paths {
          * Export Plan Archive
          * @description ЭКС.ФТ.7 «Скачать все» — архив с KML и GeoJSON по каждому БВС группы.
          */
-        get: operations["export_plan_archive_api_plans__plan_id__export_all_get"];
+        get: operations["export_plan_archive_api_plans__plan_id__export_zip_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -312,6 +352,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/safety-checks/{report_id}/violations/{violation_id}/ignore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ignore Violation
+         * @description Оператор принимает риск конкретного нарушения (или снимает отметку).
+         *
+         *     Если так отмечены все нарушения отчёта, план можно подтвердить вопреки
+         *     ЭКС.ФТ.2 — расширение по запросу пользователя.
+         */
+        post: operations["ignore_violation_api_safety_checks__report_id__violations__violation_id__ignore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks": {
         parameters: {
             query?: never;
@@ -352,6 +415,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Body_confirm_plan_api_plans__plan_id__confirm_post */
+        Body_confirm_plan_api_plans__plan_id__confirm_post: {
+            /** Confirmed By */
+            confirmed_by?: string | null;
+        };
+        /** Body_create_fleet_api_fleets_post */
+        Body_create_fleet_api_fleets_post: {
+            /** File */
+            file: string;
+            /** Location Name */
+            location_name?: string | null;
+            /** Name */
+            name: string;
+        };
         /** Body_create_plan_api_plans_post */
         Body_create_plan_api_plans_post: {
             /** Task Id */
@@ -371,6 +448,8 @@ export interface components {
             criterion_mode: string;
             /** Environment Id */
             environment_id: string;
+            /** Fleet Id */
+            fleet_id: string;
             /** Gsd Cm */
             gsd_cm: number;
             /** Name */
@@ -388,6 +467,11 @@ export interface components {
              * Format: date
              */
             work_date: string;
+        };
+        /** Body_ignore_violation_api_safety_checks__report_id__violations__violation_id__ignore_post */
+        Body_ignore_violation_api_safety_checks__report_id__violations__violation_id__ignore_post: {
+            /** Ignored */
+            ignored: boolean;
         };
         /** Body_recheck_safety_check_api_safety_checks_recheck_post */
         Body_recheck_safety_check_api_safety_checks_recheck_post: {
@@ -437,11 +521,6 @@ export interface components {
             file: string;
             /** Name */
             name: string;
-        };
-        /** Body_upload_fleet_api_fleet_post */
-        Body_upload_fleet_api_fleet_post: {
-            /** File */
-            file: string;
         };
         /** EnvironmentDetail */
         EnvironmentDetail: {
@@ -506,6 +585,14 @@ export interface components {
             id: string;
             /** Instances */
             instances: components["schemas"]["FleetInstance"][];
+            /** Location Lat */
+            location_lat: number;
+            /** Location Lon */
+            location_lon: number;
+            /** Location Name */
+            location_name?: string | null;
+            /** Name */
+            name: string;
             /** Ready Count */
             ready_count: number;
             /**
@@ -529,6 +616,10 @@ export interface components {
             error?: string | null;
             /** Inventory Number */
             inventory_number: string;
+            /** Location Lat */
+            location_lat?: number | null;
+            /** Location Lon */
+            location_lon?: number | null;
             /** Model Key */
             model_key: string;
             /** Model Name */
@@ -554,6 +645,14 @@ export interface components {
             errors: components["schemas"]["FleetIssue"][];
             /** Id */
             id: string;
+            /** Location Lat */
+            location_lat: number;
+            /** Location Lon */
+            location_lon: number;
+            /** Location Name */
+            location_name?: string | null;
+            /** Name */
+            name: string;
             /** Ready Count */
             ready_count: number;
             /**
@@ -687,6 +786,11 @@ export interface components {
             /** Confirmed By */
             confirmed_by?: string | null;
             /**
+             * Confirmed With Overrides
+             * @default false
+             */
+            confirmed_with_overrides: boolean;
+            /**
              * Created At
              * Format: date-time
              */
@@ -718,8 +822,9 @@ export interface components {
             /**
              * Status
              * @default Черновик
+             * @enum {string}
              */
-            status: string;
+            status: "Черновик" | "Проверен" | "Подтвержден" | "Выгружен";
             /** Swath M */
             swath_m: number;
             /** Task Id */
@@ -747,6 +852,11 @@ export interface components {
             flight_time_s: number;
             /** Landing Site */
             landing_site?: string | null;
+            /**
+             * Phases
+             * @default []
+             */
+            phases: components["schemas"]["PlanSortiePhase"][];
             /** Sortie Index */
             sortie_index: number;
             /**
@@ -767,12 +877,41 @@ export interface components {
             /** Uav Id */
             uav_id: string;
         };
+        /**
+         * PlanSortiePhase
+         * @description Один этап вылета: перелёт до зоны задания, галс, переход между галсами,
+         *     возврат. Нужен, чтобы раскрыть пункт расписания на карте (ИНТ.ФТ.15) —
+         *     переходы теперь строятся в обход зон и заметно отличаются от прямой.
+         */
+        PlanSortiePhase: {
+            /** Distance M */
+            distance_m: number;
+            /**
+             * End Utc
+             * Format: date-time
+             */
+            end_utc: string;
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /**
+             * Start Utc
+             * Format: date-time
+             */
+            start_utc: string;
+        };
         /** PlanSummary */
         PlanSummary: {
             /** Confirmed At */
             confirmed_at?: string | null;
             /** Confirmed By */
             confirmed_by?: string | null;
+            /**
+             * Confirmed With Overrides
+             * @default false
+             */
+            confirmed_with_overrides: boolean;
             /**
              * Created At
              * Format: date-time
@@ -797,8 +936,9 @@ export interface components {
             /**
              * Status
              * @default Черновик
+             * @enum {string}
              */
-            status: string;
+            status: "Черновик" | "Проверен" | "Подтвержден" | "Выгружен";
             /** Task Id */
             task_id: string;
             /** Uav Model */
@@ -823,7 +963,7 @@ export interface components {
              * Violations
              * @default []
              */
-            violations: string[];
+            violations: components["schemas"]["ViolationOut"][];
         };
         /** SafetyReport */
         SafetyReport: {
@@ -847,6 +987,11 @@ export interface components {
             status: "Пройдена" | "Есть нарушения";
             /** Task Id */
             task_id: string;
+            /**
+             * Violations Acknowledged
+             * @default false
+             */
+            violations_acknowledged: boolean;
         };
         /** TaskDetail */
         TaskDetail: {
@@ -874,6 +1019,10 @@ export interface components {
             environment_id: string;
             /** Environment Name */
             environment_name: string;
+            /** Fleet Id */
+            fleet_id: string;
+            /** Fleet Name */
+            fleet_name: string;
             /** Gsd Cm */
             gsd_cm: number;
             /** Id */
@@ -913,6 +1062,10 @@ export interface components {
         };
         /** TaskSummary */
         TaskSummary: {
+            /** Area */
+            area: {
+                [key: string]: unknown;
+            };
             /**
              * Created At
              * Format: date-time
@@ -924,6 +1077,10 @@ export interface components {
             environment_id: string;
             /** Environment Name */
             environment_name: string;
+            /** Fleet Id */
+            fleet_id: string;
+            /** Fleet Name */
+            fleet_name: string;
             /** Id */
             id: string;
             /** Name */
@@ -979,6 +1136,30 @@ export interface components {
             message: string;
             /** Name */
             name?: string | null;
+        };
+        /**
+         * ViolationOut
+         * @description Одно нарушение проверки безопасности.
+         *
+         *     Прежде это была строка. Теперь у нарушения есть стабильный в пределах
+         *     отчёта идентификатор (``geozones__0``) и координата «опасного момента»:
+         *     по идентификатору оператор отмечает нарушение принятым, по координате
+         *     интерфейс ставит маркер на карту (БЕЗ.ФТ.4, ИНТ.ФТ.14).
+         */
+        ViolationOut: {
+            /** Id */
+            id: string;
+            /**
+             * Ignored
+             * @default false
+             */
+            ignored: boolean;
+            /** Lat */
+            lat?: number | null;
+            /** Lon */
+            lon?: number | null;
+            /** Message */
+            message: string;
         };
     };
     responses: never;
@@ -1073,7 +1254,7 @@ export interface operations {
             };
         };
     };
-    get_fleet_api_fleet_get: {
+    list_fleets_api_fleets_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1088,12 +1269,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FleetDetail"];
+                    "application/json": components["schemas"]["FleetSummary"][];
                 };
             };
         };
     };
-    upload_fleet_api_fleet_post: {
+    create_fleet_api_fleets_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1102,7 +1283,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_upload_fleet_api_fleet_post"];
+                "multipart/form-data": components["schemas"]["Body_create_fleet_api_fleets_post"];
             };
         };
         responses: {
@@ -1126,7 +1307,7 @@ export interface operations {
             };
         };
     };
-    get_fleet_models_api_fleet_models_get: {
+    get_fleet_models_api_fleets_models_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1142,6 +1323,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelSpecOut"][];
+                };
+            };
+        };
+    };
+    get_fleet_api_fleets__fleet_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fleet_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1389,7 +1601,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_confirm_plan_api_plans__plan_id__confirm_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1411,19 +1627,15 @@ export interface operations {
             };
         };
     };
-    export_plan_api_plans__plan_id__export_get: {
+    export_plan_geojson_api_plans__plan_id__export_geojson__uav_id__get: {
         parameters: {
-            query: {
-                /** @description формат файла */
-                format: "kml" | "geojson";
-                /** @description БВС; без него — вся группа */
-                uav_id?: string | null;
-            };
+            query?: never;
             header?: {
                 "x-user-name"?: string | null;
             };
             path: {
                 plan_id: string;
+                uav_id: string;
             };
             cookie?: never;
         };
@@ -1449,7 +1661,41 @@ export interface operations {
             };
         };
     };
-    export_plan_archive_api_plans__plan_id__export_all_get: {
+    export_plan_kml_api_plans__plan_id__export_kml__uav_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-user-name"?: string | null;
+            };
+            path: {
+                plan_id: string;
+                uav_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_plan_archive_api_plans__plan_id__export_zip_get: {
         parameters: {
             query?: never;
             header?: {
@@ -1558,6 +1804,42 @@ export interface operations {
         requestBody: {
             content: {
                 "application/x-www-form-urlencoded": components["schemas"]["Body_recheck_safety_check_api_safety_checks_recheck_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SafetyReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ignore_violation_api_safety_checks__report_id__violations__violation_id__ignore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                report_id: string;
+                violation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_ignore_violation_api_safety_checks__report_id__violations__violation_id__ignore_post"];
             };
         };
         responses: {

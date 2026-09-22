@@ -80,6 +80,7 @@ export function PlanScreen() {
   const running = isActive(job.data)
   const warnings = detail?.warnings ?? []
   const uavIds = detail ? [...new Set(detail.sorties.map((s) => s.uav_id))] : []
+  const [expanded, setExpanded] = useState<string | null>(null)
 
   const sidebar = (
     <>
@@ -156,20 +157,47 @@ export function PlanScreen() {
                 <tbody>
                   {[...detail.sorties]
                     .sort((a, b) => a.start_utc.localeCompare(b.start_utc))
-                    .map((sortie) => (
-                      <tr
-                        key={`${sortie.uav_id}-${sortie.sortie_index}`}
-                        onMouseEnter={() => setHighlight(sortie.uav_id)}
-                        onMouseLeave={() => setHighlight(null)}
-                      >
-                        <td>
-                          {sortie.uav_id} #{sortie.sortie_index + 1}
-                        </td>
-                        <td>{formatUtc(sortie.start_utc)}</td>
-                        <td>{formatUtc(sortie.end_utc)}</td>
-                        <td>{formatDuration(sortie.flight_time_s)}</td>
-                      </tr>
-                    ))}
+                    .flatMap((sortie) => {
+                      const key = `${sortie.uav_id}-${sortie.sortie_index}`
+                      const open = expanded === key
+                      const rows = [
+                        <tr
+                          key={key}
+                          className={sortie.phases.length ? "expandable" : undefined}
+                          onMouseEnter={() => setHighlight(sortie.uav_id)}
+                          onMouseLeave={() => setHighlight(null)}
+                          onClick={() =>
+                            sortie.phases.length ? setExpanded(open ? null : key) : undefined
+                          }
+                        >
+                          <td>
+                            {sortie.phases.length ? (open ? "▾ " : "▸ ") : ""}
+                            {sortie.uav_id} #{sortie.sortie_index + 1}
+                          </td>
+                          <td>{formatUtc(sortie.start_utc)}</td>
+                          <td>{formatUtc(sortie.end_utc)}</td>
+                          <td>{formatDuration(sortie.flight_time_s)}</td>
+                        </tr>,
+                      ]
+                      // ИНТ.ФТ.15: этапы вылета по клику. Переходы строятся в
+                      // обход зон, поэтому «взлёт — галсы — возврат» больше не
+                      // выводится из одной строки расписания.
+                      if (open) {
+                        for (const [index, phase] of sortie.phases.entries()) {
+                          rows.push(
+                            <tr key={`${key}-p${index}`} className="phase">
+                              <td colSpan={2}>
+                                {phase.kind === "survey" ? "▪ " : "→ "}
+                                {phase.label}
+                              </td>
+                              <td>{formatUtc(phase.end_utc)}</td>
+                              <td>{Math.round(phase.distance_m)} м</td>
+                            </tr>,
+                          )
+                        }
+                      }
+                      return rows
+                    })}
                 </tbody>
               </table>
             </div>

@@ -1,4 +1,11 @@
-/** Экран «Парк БВС» (ПБС): загрузка, список с фильтрами, карточка, справочник моделей. */
+/**
+ * Экран «Парк БВС» (ПБС).
+ *
+ * Парков теперь несколько, каждый — именованная сущность со своей локацией,
+ * поэтому экран двухуровневый: список парков -> экземпляры выбранного парка ->
+ * карточка экземпляра. Прежде парк был один, и список экземпляров открывался
+ * сразу.
+ */
 import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -109,10 +116,11 @@ function UploadFleetModal({ onClose }: { onClose: () => void }) {
   const toast = useToast()
 
   const upload = useMutation({
-    mutationFn: (file: File) => api.uploadFleet(file),
+    mutationFn: (values: { name: string; locationName: string; file: File }) =>
+      api.uploadFleet(values.name, values.file, values.locationName || undefined),
     onSuccess: (summary) => {
-      queryClient.invalidateQueries({ queryKey: ["fleet"] })
-      toast(`Парк загружен: ${summary.ready_count} из ${summary.total} готовы`)
+      queryClient.invalidateQueries({ queryKey: ["fleets"] })
+      toast(`Парк «${summary.name}» загружен: ${summary.ready_count} из ${summary.total} готовы`)
       onClose()
     },
     onError: (err: Error) => setError(err.message || "Ошибка загрузки"),
@@ -124,14 +132,31 @@ function UploadFleetModal({ onClose }: { onClose: () => void }) {
         onSubmit={(event) => {
           event.preventDefault()
           setError(null)
-          const file = new FormData(event.currentTarget).get("file")
+          const form = new FormData(event.currentTarget)
+          const name = String(form.get("name") ?? "").trim()
+          const locationName = String(form.get("location_name") ?? "").trim()
+          const file = form.get("file")
+          if (!name) {
+            setError("Укажите название парка")
+            return
+          }
           if (!(file instanceof File) || !file.size) {
             setError("Выберите файл парка")
             return
           }
-          upload.mutate(file)
+          upload.mutate({ name, locationName, file })
         }}
       >
+        <label htmlFor="fleet-name">Название парка</label>
+        <input type="text" id="fleet-name" name="name" placeholder="Парк Уктус" required />
+
+        <label htmlFor="fleet-location">Расположение (необязательно)</label>
+        <input type="text" id="fleet-location" name="location_name" placeholder="Екатеринбург" />
+        <p className="hint">
+          Координаты парка определяются по файлу — усредняются локации экземпляров. Это
+          название нужно только для подписи в списке.
+        </p>
+
         <label htmlFor="fleet-file">Файл JSON или CSV</label>
         <input
           type="file"
@@ -141,7 +166,9 @@ function UploadFleetModal({ onClose }: { onClose: () => void }) {
           required
         />
         <p className="hint">
-          Перечень экземпляров БВС: инвентарный номер, модель, статус готовности, базовая ВПП.
+          Перечень экземпляров БВС: инвентарный номер, модель, статус готовности, базовая ВПП,
+          координаты стоянки (location_lat, location_lon). Без координат хотя бы у одного
+          экземпляра парк не принимается: расчёт строит точку взлёта по ним.
         </p>
         {error ? <p className="error">{error}</p> : null}
         <div className="actions">
@@ -165,7 +192,13 @@ export function FleetScreen() {
   const [modelFilter, setModelFilter] = useState("")
   const [statusFilter, setStatusFilter] = useState("")
 
-  const fleet = useQuery({ queryKey: ["fleet"], queryFn: api.getFleet })
+  const [selectedFleet, setSelectedFleet] = useState<string | null>(null)
+  const fleets = useQuery({ queryKey: ["fleets"], queryFn: api.listFleets })
+  const fleet = useQuery({
+    queryKey: ["fleet", selectedFleet],
+    queryFn: () => api.getFleet(selectedFleet as string),
+    enabled: selectedFleet != null,
+  })
   const models = useQuery({ queryKey: ["models"], queryFn: api.listModels })
 
   const instances = fleet.data?.instances ?? []
@@ -185,6 +218,44 @@ export function FleetScreen() {
   const current = selected
     ? instances.find((instance) => instance.inventory_number === selected)
     : undefined
+
+  const fleetList = (
+    <>
+      <p className="sb-sub">
+        {fleets.data?.length
+          ? "Выберите парк, чтобы посмотреть его экземпляры."
+          : "Парков нет. Загрузите файл JSON или CSV с перечнем экземпляров БВС."}
+      </p>
+      <ul className="task-list">
+        {(fleets.data ?? []).map((item) => (
+          <li key={item.id}>
+            <a
+              href="#"
+              onClick={(event) => {
+                event.preventDefault()
+                setSelected(null)
+                setSelectedFleet(item.id)
+              }}
+            >
+              <span className="t-name">{item.name}</span>
+              <span className="t-meta">
+                {item.location_name
+                  ? item.location_name
+                  : `${item.location_lat.toFixed(3)}, ${item.location_lon.toFixed(3)}`}{" "}
+                ·{" "}
+                <span
+                  className={`status-badge ${item.status === "Корректна" ? "ok" : "bad"}`}
+                  style={{ margin: 0, padding: "1px 7px" }}
+                >
+                  {item.ready_count}/{item.total} готовы
+                </span>
+              </span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </>
+  )
 
   const sidebar = current ? (
     <InstanceCard
@@ -214,13 +285,26 @@ export function FleetScreen() {
       </button>
 
       {!fleet.data ? (
-        <p className="sb-sub">
-          Парк не загружен. Загрузите файл JSON или CSV с перечнем экземпляров БВС.
-        </p>
+        fleetList
       ) : (
         <>
+          <a
+            href="#"
+            className="back-link"
+            onClick={(event) => {
+              event.preventDefault()
+              setSelected(null)
+              setSelectedFleet(null)
+            }}
+          >
+            ← Ко всем паркам
+          </a>
+          <p className="sb-title" style={{ marginTop: 0 }}>
+            {fleet.data.name}
+          </p>
           <p className="sb-sub">
-            Загружен: {new Date(fleet.data.uploaded_at).toLocaleString("ru-RU")}
+            {fleet.data.location_name ? `${fleet.data.location_name} · ` : ""}
+            загружен {new Date(fleet.data.uploaded_at).toLocaleString("ru-RU")}
           </p>
           <span className={fleet.data.status === "Корректна" ? "status-badge ok" : "status-badge bad"}>
             {fleet.data.status} · {fleet.data.ready_count}/{fleet.data.total} готовы

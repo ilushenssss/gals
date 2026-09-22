@@ -68,6 +68,8 @@ export function TaskDetailScreen() {
         <div className="warning-box">{detail.daylight_warning}</div>
       ) : null}
       <dl className="counts">
+        <dt>Парк БВС</dt>
+        <dd>{detail.fleet_name}</dd>
         <dt>Тип съемки</dt>
         <dd>{detail.survey_type}</dd>
         <dt>GSD</dt>

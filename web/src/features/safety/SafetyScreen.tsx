@@ -109,6 +109,24 @@ export function SafetyScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finishedReportPlan])
 
+  // Подтверждённый план уже зафиксирован: менять отметки после подтверждения
+  // бессмысленно, оно от них не откатывается.
+  const planLocked =
+    plan.data?.status === "Подтвержден" || plan.data?.status === "Выгружен"
+
+  // Оператор принимает риск конкретного нарушения. Если приняты все — план
+  // можно подтвердить вопреки ЭКС.ФТ.2. Сводная строка «...и ещё N» тоже
+  // отдельная запись: принимая её, оператор принимает и невидимые нарушения,
+  // поэтому она показывается как обычная строка со своей галочкой.
+  const ignore = useMutation({
+    mutationFn: ({ violationId, ignored }: { violationId: string; ignored: boolean }) =>
+      api.ignoreViolation(current!.id, violationId, ignored),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["safety"] })
+    },
+    onError: (err: Error) => toast(err.message || "Не удалось отметить нарушение"),
+  })
+
   const recheck = useMutation({
     mutationFn: () => api.recheckSafety(planId!),
     onSuccess: () => {
@@ -189,8 +207,23 @@ export function SafetyScreen() {
                 </div>
                 {!check!.passed && check!.violations.length ? (
                   <ul className="sc-violations">
-                    {check!.violations.map((violation, index) => (
-                      <li key={index}>{violation}</li>
+                    {check!.violations.map((violation) => (
+                      <li key={violation.id}>
+                        <label className="violation">
+                          <input
+                            type="checkbox"
+                            checked={violation.ignored}
+                            disabled={ignore.isPending || planLocked}
+                            onChange={(event) =>
+                              ignore.mutate({
+                                violationId: violation.id,
+                                ignored: event.target.checked,
+                              })
+                            }
+                          />
+                          <span>{violation.message}</span>
+                        </label>
+                      </li>
                     ))}
                   </ul>
                 ) : null}
@@ -231,7 +264,7 @@ export function SafetyScreen() {
     <>
       <EnvironmentLayers environment={environment.data ?? null} hidden={NO_HIDDEN} dimmed />
       <PlanRoutes plan={detail} area={task.data?.area ?? null} highlightUav={highlight} />
-      <ViolationMarkers plan={detail} report={current} />
+      <ViolationMarkers report={current} />
       <Sidebar>{sidebar}</Sidebar>
       <LegendSlot>
         <UavLegend uavIds={uavIds} onHover={setHighlight} />

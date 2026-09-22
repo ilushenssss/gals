@@ -1,6 +1,53 @@
 {
   "components": {
     "schemas": {
+      "Body_confirm_plan_api_plans__plan_id__confirm_post": {
+        "properties": {
+          "confirmed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed By"
+          }
+        },
+        "title": "Body_confirm_plan_api_plans__plan_id__confirm_post",
+        "type": "object"
+      },
+      "Body_create_fleet_api_fleets_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "location_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Name"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "file"
+        ],
+        "title": "Body_create_fleet_api_fleets_post",
+        "type": "object"
+      },
       "Body_create_plan_api_plans_post": {
         "properties": {
           "task_id": {
@@ -62,6 +109,10 @@
             "title": "Environment Id",
             "type": "string"
           },
+          "fleet_id": {
+            "title": "Fleet Id",
+            "type": "string"
+          },
           "gsd_cm": {
             "title": "Gsd Cm",
             "type": "number"
@@ -116,6 +167,7 @@
         "required": [
           "name",
           "environment_id",
+          "fleet_id",
           "survey_type",
           "gsd_cm",
           "work_date",
@@ -123,6 +175,19 @@
           "area_file"
         ],
         "title": "Body_create_task_api_tasks_post",
+        "type": "object"
+      },
+      "Body_ignore_violation_api_safety_checks__report_id__violations__violation_id__ignore_post": {
+        "properties": {
+          "ignored": {
+            "title": "Ignored",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ignored"
+        ],
+        "title": "Body_ignore_violation_api_safety_checks__report_id__violations__violation_id__ignore_post",
         "type": "object"
       },
       "Body_recheck_safety_check_api_safety_checks_recheck_post": {
@@ -281,20 +346,6 @@
         "title": "Body_upload_environment_api_environments_post",
         "type": "object"
       },
-      "Body_upload_fleet_api_fleet_post": {
-        "properties": {
-          "file": {
-            "contentMediaType": "application/octet-stream",
-            "title": "File",
-            "type": "string"
-          }
-        },
-        "required": [
-          "file"
-        ],
-        "title": "Body_upload_fleet_api_fleet_post",
-        "type": "object"
-      },
       "EnvironmentDetail": {
         "properties": {
           "counts": {
@@ -427,6 +478,29 @@
             "title": "Instances",
             "type": "array"
           },
+          "location_lat": {
+            "title": "Location Lat",
+            "type": "number"
+          },
+          "location_lon": {
+            "title": "Location Lon",
+            "type": "number"
+          },
+          "location_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Name"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
           "ready_count": {
             "title": "Ready Count",
             "type": "integer"
@@ -451,6 +525,9 @@
         },
         "required": [
           "id",
+          "name",
+          "location_lat",
+          "location_lon",
           "uploaded_at",
           "status",
           "total",
@@ -487,6 +564,28 @@
           "inventory_number": {
             "title": "Inventory Number",
             "type": "string"
+          },
+          "location_lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Lat"
+          },
+          "location_lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Lon"
           },
           "model_key": {
             "title": "Model Key",
@@ -553,6 +652,29 @@
             "title": "Id",
             "type": "string"
           },
+          "location_lat": {
+            "title": "Location Lat",
+            "type": "number"
+          },
+          "location_lon": {
+            "title": "Location Lon",
+            "type": "number"
+          },
+          "location_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Name"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
           "ready_count": {
             "title": "Ready Count",
             "type": "integer"
@@ -577,6 +699,9 @@
         },
         "required": [
           "id",
+          "name",
+          "location_lat",
+          "location_lon",
           "uploaded_at",
           "status",
           "total",
@@ -886,6 +1011,11 @@
             ],
             "title": "Confirmed By"
           },
+          "confirmed_with_overrides": {
+            "default": false,
+            "title": "Confirmed With Overrides",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -952,6 +1082,12 @@
           },
           "status": {
             "default": "Черновик",
+            "enum": [
+              "Черновик",
+              "Проверен",
+              "Подтвержден",
+              "Выгружен"
+            ],
             "title": "Status",
             "type": "string"
           },
@@ -1029,6 +1165,14 @@
             ],
             "title": "Landing Site"
           },
+          "phases": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PlanSortiePhase"
+            },
+            "title": "Phases",
+            "type": "array"
+          },
           "sortie_index": {
             "title": "Sortie Index",
             "type": "integer"
@@ -1077,6 +1221,42 @@
         "title": "PlanSortie",
         "type": "object"
       },
+      "PlanSortiePhase": {
+        "description": "Один этап вылета: перелёт до зоны задания, галс, переход между галсами,\nвозврат. Нужен, чтобы раскрыть пункт расписания на карте (ИНТ.ФТ.15) —\nпереходы теперь строятся в обход зон и заметно отличаются от прямой.",
+        "properties": {
+          "distance_m": {
+            "title": "Distance M",
+            "type": "number"
+          },
+          "end_utc": {
+            "format": "date-time",
+            "title": "End Utc",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "start_utc": {
+            "format": "date-time",
+            "title": "Start Utc",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "kind",
+          "start_utc",
+          "end_utc",
+          "distance_m"
+        ],
+        "title": "PlanSortiePhase",
+        "type": "object"
+      },
       "PlanSummary": {
         "properties": {
           "confirmed_at": {
@@ -1101,6 +1281,11 @@
               }
             ],
             "title": "Confirmed By"
+          },
+          "confirmed_with_overrides": {
+            "default": false,
+            "title": "Confirmed With Overrides",
+            "type": "boolean"
           },
           "created_at": {
             "format": "date-time",
@@ -1149,6 +1334,12 @@
           },
           "status": {
             "default": "Черновик",
+            "enum": [
+              "Черновик",
+              "Проверен",
+              "Подтвержден",
+              "Выгружен"
+            ],
             "title": "Status",
             "type": "string"
           },
@@ -1206,7 +1397,7 @@
           "violations": {
             "default": [],
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/ViolationOut"
             },
             "title": "Violations",
             "type": "array"
@@ -1257,6 +1448,11 @@
           "task_id": {
             "title": "Task Id",
             "type": "string"
+          },
+          "violations_acknowledged": {
+            "default": false,
+            "title": "Violations Acknowledged",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1324,6 +1520,14 @@
           },
           "environment_name": {
             "title": "Environment Name",
+            "type": "string"
+          },
+          "fleet_id": {
+            "title": "Fleet Id",
+            "type": "string"
+          },
+          "fleet_name": {
+            "title": "Fleet Name",
             "type": "string"
           },
           "gsd_cm": {
@@ -1424,26 +1628,33 @@
           "name",
           "environment_id",
           "environment_name",
+          "fleet_id",
+          "fleet_name",
           "survey_type",
           "work_date",
           "status",
           "version",
           "created_at",
           "updated_at",
+          "area",
           "gsd_cm",
           "window_start",
           "window_end",
           "wind_speed_ms",
           "cloud_cover_pct",
           "criterion_mode",
-          "criterion_alpha",
-          "area"
+          "criterion_alpha"
         ],
         "title": "TaskDetail",
         "type": "object"
       },
       "TaskSummary": {
         "properties": {
+          "area": {
+            "additionalProperties": true,
+            "title": "Area",
+            "type": "object"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -1466,6 +1677,14 @@
           },
           "environment_name": {
             "title": "Environment Name",
+            "type": "string"
+          },
+          "fleet_id": {
+            "title": "Fleet Id",
+            "type": "string"
+          },
+          "fleet_name": {
+            "title": "Fleet Name",
             "type": "string"
           },
           "id": {
@@ -1527,12 +1746,15 @@
           "name",
           "environment_id",
           "environment_name",
+          "fleet_id",
+          "fleet_name",
           "survey_type",
           "work_date",
           "status",
           "version",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "area"
         ],
         "title": "TaskSummary",
         "type": "object"
@@ -1616,6 +1838,52 @@
           "message"
         ],
         "title": "ValidationIssue",
+        "type": "object"
+      },
+      "ViolationOut": {
+        "description": "Одно нарушение проверки безопасности.\n\nПрежде это была строка. Теперь у нарушения есть стабильный в пределах\nотчёта идентификатор (``geozones__0``) и координата «опасного момента»:\nпо идентификатору оператор отмечает нарушение принятым, по координате\nинтерфейс ставит маркер на карту (БЕЗ.ФТ.4, ИНТ.ФТ.14).",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "ignored": {
+            "default": false,
+            "title": "Ignored",
+            "type": "boolean"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lon"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "message"
+        ],
+        "title": "ViolationOut",
         "type": "object"
       }
     }
@@ -1732,33 +2000,37 @@
         ]
       }
     },
-    "/api/fleet": {
+    "/api/fleets": {
       "get": {
-        "operationId": "get_fleet_api_fleet_get",
+        "operationId": "list_fleets_api_fleets_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FleetDetail"
+                  "items": {
+                    "$ref": "#/components/schemas/FleetSummary"
+                  },
+                  "title": "Response List Fleets Api Fleets Get",
+                  "type": "array"
                 }
               }
             },
             "description": "Successful Response"
           }
         },
-        "summary": "Get Fleet",
+        "summary": "List Fleets",
         "tags": [
           "fleet"
         ]
       },
       "post": {
-        "operationId": "upload_fleet_api_fleet_post",
+        "operationId": "create_fleet_api_fleets_post",
         "requestBody": {
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/Body_upload_fleet_api_fleet_post"
+                "$ref": "#/components/schemas/Body_create_fleet_api_fleets_post"
               }
             }
           },
@@ -1786,15 +2058,15 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Upload Fleet",
+        "summary": "Create Fleet",
         "tags": [
           "fleet"
         ]
       }
     },
-    "/api/fleet/models": {
+    "/api/fleets/models": {
       "get": {
-        "operationId": "get_fleet_models_api_fleet_models_get",
+        "operationId": "get_fleet_models_api_fleets_models_get",
         "responses": {
           "200": {
             "content": {
@@ -1803,7 +2075,7 @@
                   "items": {
                     "$ref": "#/components/schemas/ModelSpecOut"
                   },
-                  "title": "Response Get Fleet Models Api Fleet Models Get",
+                  "title": "Response Get Fleet Models Api Fleets Models Get",
                   "type": "array"
                 }
               }
@@ -1812,6 +2084,48 @@
           }
         },
         "summary": "Get Fleet Models",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/api/fleets/{fleet_id}": {
+      "get": {
+        "operationId": "get_fleet_api_fleets__fleet_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fleet_id",
+            "required": true,
+            "schema": {
+              "title": "Fleet Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Fleet",
         "tags": [
           "fleet"
         ]
@@ -2137,7 +2451,7 @@
     },
     "/api/plans/{plan_id}/confirm": {
       "post": {
-        "description": "ЭКС.ФТ.6 «Подтвердить». 409 при конфликте — с именем подтвердившего.",
+        "description": "ЭКС.ФТ.6 «Подтвердить». 409 при конфликте — с именем подтвердившего.\n\nФИО приходит полем формы; если его не прислали — берётся имя из заголовка\n``X-User-Name``, которым подписаны и правки задач, и только потом дефолт.",
         "operationId": "confirm_plan_api_plans__plan_id__confirm_post",
         "parameters": [
           {
@@ -2166,6 +2480,15 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_confirm_plan_api_plans__plan_id__confirm_post"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -2194,10 +2517,10 @@
         ]
       }
     },
-    "/api/plans/{plan_id}/export": {
+    "/api/plans/{plan_id}/export/geojson/{uav_id}": {
       "get": {
-        "description": "ЭКС.ФТ.7-8: файл по одному БВС (или сводный по группе).",
-        "operationId": "export_plan_api_plans__plan_id__export_get",
+        "description": "ЭКС.ФТ.7-8: GeoJSON по одному БВС.",
+        "operationId": "export_plan_geojson_api_plans__plan_id__export_geojson__uav_id__get",
         "parameters": [
           {
             "in": "path",
@@ -2209,36 +2532,12 @@
             }
           },
           {
-            "description": "формат файла",
-            "in": "query",
-            "name": "format",
+            "in": "path",
+            "name": "uav_id",
             "required": true,
             "schema": {
-              "description": "формат файла",
-              "enum": [
-                "kml",
-                "geojson"
-              ],
-              "title": "Format",
+              "title": "Uav Id",
               "type": "string"
-            }
-          },
-          {
-            "description": "БВС; без него — вся группа",
-            "in": "query",
-            "name": "uav_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "БВС; без него — вся группа",
-              "title": "Uav Id"
             }
           },
           {
@@ -2278,16 +2577,82 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Export Plan",
+        "summary": "Export Plan Geojson",
         "tags": [
           "plans"
         ]
       }
     },
-    "/api/plans/{plan_id}/export/all": {
+    "/api/plans/{plan_id}/export/kml/{uav_id}": {
+      "get": {
+        "description": "ЭКС.ФТ.7-8: KML по одному БВС.",
+        "operationId": "export_plan_kml_api_plans__plan_id__export_kml__uav_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "uav_id",
+            "required": true,
+            "schema": {
+              "title": "Uav Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Plan Kml",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/api/plans/{plan_id}/export/zip": {
       "get": {
         "description": "ЭКС.ФТ.7 «Скачать все» — архив с KML и GeoJSON по каждому БВС группы.",
-        "operationId": "export_plan_archive_api_plans__plan_id__export_all_get",
+        "operationId": "export_plan_archive_api_plans__plan_id__export_zip_get",
         "parameters": [
           {
             "in": "path",
@@ -2477,6 +2842,68 @@
           }
         },
         "summary": "Recheck Safety Check",
+        "tags": [
+          "safety"
+        ]
+      }
+    },
+    "/api/safety-checks/{report_id}/violations/{violation_id}/ignore": {
+      "post": {
+        "description": "Оператор принимает риск конкретного нарушения (или снимает отметку).\n\nЕсли так отмечены все нарушения отчёта, план можно подтвердить вопреки\nЭКС.ФТ.2 — расширение по запросу пользователя.",
+        "operationId": "ignore_violation_api_safety_checks__report_id__violations__violation_id__ignore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "violation_id",
+            "required": true,
+            "schema": {
+              "title": "Violation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_ignore_violation_api_safety_checks__report_id__violations__violation_id__ignore_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SafetyReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ignore Violation",
         "tags": [
           "safety"
         ]

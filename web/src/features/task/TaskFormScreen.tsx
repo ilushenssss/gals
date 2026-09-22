@@ -43,6 +43,9 @@ export function TaskFormScreen() {
     enabled: Boolean(envId),
   })
 
+  // Парк — часть постановки задачи и после создания не меняется.
+  const fleets = useQuery({ queryKey: ["fleets"], queryFn: api.listFleets })
+
   const prefill = useMemo(() => (task ? polygonToPoints(task.area) : []), [task])
   const [areaMode, setAreaMode] = useState<"file" | "map" | null>(null)
   const [points, setPoints] = useState<DrawPoint[] | null>(null)
@@ -64,6 +67,7 @@ export function TaskFormScreen() {
       const values: Record<string, unknown> = {
         name: data.get("name"),
         environment_id: envId,
+        fleet_id: data.get("fleet_id"),
         survey_type: data.get("survey_type"),
         gsd_cm: data.get("gsd_cm"),
         work_date: data.get("work_date"),
@@ -220,6 +224,37 @@ export function TaskFormScreen() {
             </button>
           </div>
         </div>
+
+        <label>Парк БВС</label>
+        {task ? (
+          <>
+            <input type="hidden" name="fleet_id" value={task.fleet_id} />
+            <input type="text" value={task.fleet_name} disabled />
+            <p className="hint">
+              Парк задачи не меняется: по нему уже считались планы. Нужен другой — создайте
+              новую задачу.
+            </p>
+          </>
+        ) : (
+          <>
+            <select name="fleet_id" required defaultValue="">
+              <option value="" disabled>
+                {fleets.data?.length ? "Выберите парк" : "Парки не загружены"}
+              </option>
+              {(fleets.data ?? []).map((fleet) => (
+                <option key={fleet.id} value={fleet.id}>
+                  {fleet.name}
+                  {fleet.location_name ? ` — ${fleet.location_name}` : ""} ({fleet.ready_count}{" "}
+                  готовых)
+                </option>
+              ))}
+            </select>
+            <p className="hint">
+              Парк должен базироваться не дальше 150 км от обстановки — иначе БВС физически не
+              долетят до области работ.
+            </p>
+          </>
+        )}
 
         <label>Тип съемки</label>
         <select name="survey_type" defaultValue={task?.survey_type ?? "RGB"}>
