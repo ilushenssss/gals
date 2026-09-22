@@ -397,7 +397,7 @@ def test_progress_is_visible_outside_the_transaction_of_the_run(client, db):
     job = job_service.submit("plan", task_id)[0]
 
     reporter = ProgressReporter(job.id)
-    reporter.stage("tracks", 42)
+    reporter.stage("save", 42)
 
     assert client.get(f"/api/plan-jobs/{job.id}").json()["progress"] == 42
 
@@ -412,7 +412,7 @@ def test_progress_reporter_raises_on_cancel_request(client, db):
     )
 
     with pytest.raises(JobCancelled):
-        ProgressReporter(job.id).stage("working_area")
+        ProgressReporter(job.id).stage("load")
 
 
 def test_progress_reporter_without_job_is_inert(client):

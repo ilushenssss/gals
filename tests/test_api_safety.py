@@ -23,10 +23,14 @@ def _upload_environment(client, with_launch_site=True, no_fly=False):
         })
     if no_fly:
         # Небольшая БПЗ прямо посередине области облета, задаваемой в _create_task ниже.
+        # «Стена» БПЗ поперёк всего пути от ВПП-1 до области облёта: растянута
+        # по широте намного дальше, чем ищет локальный A* (visibility.find_path),
+        # поэтому обхода заведомо нет и нарушение остаётся неустранимым.
+        # Маленькую зону расчёт теперь обходит сам — на ней нарушения не будет.
         features.append({
             "type": "Feature",
             "properties": {"layer": "no_fly", "safety_buffer_m": 0},
-            "geometry": {"type": "Polygon", "coordinates": square_coords(37.581, 55.7025, 0.003, 0.002)},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.565, 55.0, 0.01, 1.4)},
         })
     scene = {"type": "FeatureCollection", "features": features}
     data = json.dumps(scene).encode("utf-8")
@@ -111,7 +115,7 @@ def test_safety_check_happy_path_passes(client):
     assert body["auto_recalc_count"] == 0
 
 
-def test_safety_check_detects_no_fly_zone_violation(client):
+def test_safety_check_detects_unavoidable_no_fly_zone_violation(client):
     plan_id = _make_plan(client, no_fly=True)
     resp = client.post("/api/safety-checks", data={"plan_id": plan_id})
     assert resp.status_code == 200, resp.text

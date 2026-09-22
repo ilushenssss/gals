@@ -29,13 +29,10 @@ from uav_planner.models.job import PlanJob
 # (код стадии -> человекочитаемое имя, процент на входе в стадию)
 STAGES: dict[str, tuple[str, int]] = {
     "load": ("Загрузка исходных данных", 3),
-    "model": ("Подбор модели БВС и камеры", 6),
-    "survey_geometry": ("Геометрия съемки", 10),
-    "working_area": ("Построение рабочей области", 20),
-    "decomposition": ("Декомпозиция области", 30),
-    "tracks": ("Построение галсов", 30),  # 30 -> 60 по ячейкам
-    "assignment": ("Распределение по БВС", 75),
-    "schedule": ("Расписание вылетов", 75),  # 75 -> 92 по бортам
+    "model": ("Подбор моделей БВС и камер", 6),
+    # Стадии внутри кандидата отчитываются через CandidateProgress: конвейер
+    # считается целиком для каждой группы «модель+камера», и линейной шкалы
+    # «геометрия -> галсы -> расписание» на весь расчёт больше нет.
     "save": ("Сохранение плана", 96),
     # Проверка безопасности (kind='safety'): БЕЗ.ФТ.2 и БЕЗ.ФТ.3/ФТ.5.
     "safety_check": ("Проверка безопасности", 10),
@@ -43,8 +40,9 @@ STAGES: dict[str, tuple[str, int]] = {
     "safety_save": ("Сохранение отчета", 96),
 }
 
-TRACKS_SPAN = (30, 60)
-SCHEDULE_SPAN = (75, 92)
+# Весь перебор кандидатов укладывается в этот диапазон; каждый кандидат
+# получает равную долю, внутри доли — свои стадии (см. CandidateProgress).
+CANDIDATES_SPAN = (10, 92)
 
 
 class JobCancelled(Exception):
@@ -110,3 +108,43 @@ class ProgressReporter:
             ).scalar_one_or_none()
         if cancel_requested:
             raise JobCancelled()
+
+
+class CandidateProgress:
+    """Прогресс внутри одного кандидата плана.
+
+    ПЛН.ФТ.2 заставил считать полный конвейер для каждой подходящей группы
+    «модель+камера», поэтому прогресс перестал быть одной линейной шкалой:
+    каждый кандидат получает свою долю общего диапазона и отчитывается о
+    стадиях внутри неё. Иначе индикатор получасового расчёта пробегал бы от
+    10 до 92 столько раз, сколько подходящих моделей, и оператор видел бы не
+    прогресс, а мигание.
+
+    ``fraction`` — доля 0..1 внутри кандидата; подписи стадий несут имя модели,
+    когда кандидатов больше одного, — иначе непонятно, что именно считается.
+    """
+
+    def __init__(
+        self,
+        reporter: "ProgressReporter",
+        model_name: str,
+        index: int,
+        total: int,
+        span: tuple[int, int] = CANDIDATES_SPAN,
+    ) -> None:
+        self._reporter = reporter
+        self._prefix = f"{model_name}: " if total > 1 else ""
+        low, high = span
+        width = (high - low) / max(total, 1)
+        self._low = low + width * index
+        self._high = self._low + width
+
+    def stage(self, label: str, fraction: float) -> None:
+        fraction = min(max(fraction, 0.0), 1.0)
+        percent = int(self._low + (self._high - self._low) * fraction)
+        self._reporter.publish(f"{self._prefix}{label}", percent)
+
+    def span(self, label: str, done: int, total: int, bounds: tuple[float, float]) -> None:
+        low_f, high_f = bounds
+        share = 0.0 if total <= 0 else min(max(done / total, 0.0), 1.0)
+        self.stage(label, low_f + (high_f - low_f) * share)

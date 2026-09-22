@@ -33,10 +33,14 @@ def _upload_environment(client, no_fly=False):
         },
     ]
     if no_fly:
+        # «Стена» БПЗ поперёк всего пути от ВПП-1 до области облёта: растянута
+        # по широте намного дальше, чем ищет локальный A* (visibility.find_path),
+        # поэтому обхода заведомо нет и нарушение остаётся неустранимым.
+        # Маленькую зону расчёт теперь обходит сам — на ней нарушения не будет.
         features.append({
             "type": "Feature",
             "properties": {"layer": "no_fly", "safety_buffer_m": 0},
-            "geometry": {"type": "Polygon", "coordinates": square_coords(37.581, 55.7025, 0.003, 0.002)},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.565, 55.0, 0.01, 1.4)},
         })
     data = json.dumps({"type": "FeatureCollection", "features": features}).encode("utf-8")
     resp = client.post(

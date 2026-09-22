@@ -26,7 +26,7 @@ from uav_planner.api.schemas.environment import (
 )
 from uav_planner.api.schemas.fleet import FleetDetail, FleetInstance, FleetIssue
 from uav_planner.api.schemas.job import JobInfo
-from uav_planner.api.schemas.plan import PlanDetail, PlanSortie
+from uav_planner.api.schemas.plan import PlanDetail, PlanSortie, PlanSortiePhase
 from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport
 from uav_planner.api.schemas.task import TaskDetail
 from uav_planner.db.geo import from_db_geojson, to_db, to_db_multiline
@@ -280,6 +280,7 @@ def plan_to_rows(detail: PlanDetail) -> Plan:
         confirmed_at=detail.confirmed_at,
         confirmed_by=detail.confirmed_by,
         exported_at=detail.exported_at,
+        confirmed_with_overrides=detail.confirmed_with_overrides,
         model_key=detail.model_key,
         camera_key=detail.camera_key,
         height_m=detail.height_m,
@@ -300,6 +301,7 @@ def plan_to_rows(detail: PlanDetail) -> Plan:
                 distance_m=sortie.distance_m,
                 route_geom=to_db(shape(sortie.track_geojson)),
                 survey_tracks_geom=to_db_multiline(shape(sortie.survey_tracks_geojson)),
+                phases=[phase.model_dump(mode="json") for phase in sortie.phases],
             )
         )
     return row
@@ -323,6 +325,7 @@ def plan_from_row(row: Plan) -> PlanDetail:
         confirmed_at=row.confirmed_at,
         confirmed_by=row.confirmed_by,
         exported_at=row.exported_at,
+        confirmed_with_overrides=row.confirmed_with_overrides,
         model_key=row.model_key,
         camera_key=row.camera_key,
         height_m=row.height_m,
@@ -341,6 +344,7 @@ def plan_from_row(row: Plan) -> PlanDetail:
                 distance_m=s.distance_m,
                 track_geojson=from_db_geojson(s.route_geom),
                 survey_tracks_geojson=from_db_geojson(s.survey_tracks_geom),
+                phases=[PlanSortiePhase(**phase) for phase in (s.phases or [])],
             )
             for s in sorted(row.sorties, key=lambda s: (s.uav_id, s.sortie_index))
         ],

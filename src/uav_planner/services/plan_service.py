@@ -30,7 +30,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, time, timezone
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from shapely.geometry import LineString, MultiLineString, Point, mapping, shape
@@ -40,9 +41,9 @@ from shapely.ops import unary_union
 from uav_planner import repositories
 from uav_planner.domain.errors import ConflictError, ValidationError
 from uav_planner.domain.errors import PlanInfeasibleError as _DomainPlanInfeasibleError
-from uav_planner.camera import CAMERA_SPECS, CameraError, plan_survey_geometry
+from uav_planner.camera import CAMERA_SPECS, CameraError, SurveyGeometry, plan_survey_geometry
 from uav_planner.coverage import boustrophedon_cells, generate_tracks, split_long_track
-from uav_planner.fleet import FLEET_MODELS, flight_time_budget_s
+from uav_planner.fleet import FLEET_MODELS, UavModelSpec, flight_time_budget_s
 from uav_planner.geometry import (
     AllowedZone,
     GeometryError,
@@ -53,15 +54,16 @@ from uav_planner.geometry import (
     compute_working_area,
     validate_polygon,
 )
-from uav_planner.jobs.progress import SCHEDULE_SPAN, TRACKS_SPAN, ProgressReporter
+from uav_planner.jobs.progress import CandidateProgress, ProgressReporter
 from uav_planner.logging_setup import log_context
-from uav_planner.routing.greedy import Track, Vehicle, greedy_assign_and_split
+from uav_planner.routing import Sortie, Track, Vehicle, cluster_assign_and_route
 from uav_planner.schedule import ScheduleError, assign_timestamps
+from uav_planner.visibility import find_path
 
 from . import fleet_service
 from . import environment_service
 from . import task_service
-from uav_planner.api.schemas.plan import PlanDetail, PlanSortie, PlanSummary
+from uav_planner.api.schemas.plan import PlanDetail, PlanSortie, PlanSortiePhase, PlanSummary
 
 
 SPECTRUM_BY_SURVEY_TYPE = {
@@ -119,24 +121,24 @@ def _time_to_hours(t: time | None) -> float | None:
     return None if t is None else t.hour + t.minute / 60.0 + t.second / 3600.0
 
 
-def _pick_model_group(survey_type: str, eligible: list) -> tuple[str, str, list]:
-    """ПЛН.ФТ.10-подготовка: выбор модели БВС и совместимой камеры — группа
-    готовых экземпляров с подходящей нагрузкой, в которой больше всего экземпляров.
-
-    Состав парка стал явным аргументом вместо скрытого глобального чтения
-    внутри функции: фоновая работа должна брать его один раз и не зависеть от
-    того, что оператор перезалил парк посреди получасового счета.
-    """
+def _survey_type_spectrum(survey_type: str) -> str:
     spectrum = SPECTRUM_BY_SURVEY_TYPE.get(survey_type)
     if spectrum is None:
         raise PlanInfeasibleError(
             f"тип съемки «{survey_type}» пока не поддерживается расчетным ядром "
             "(LiDAR и геофизическая съемка — модельные профили, будущая версия)"
         )
+    return spectrum
 
-    if not eligible:
-        raise PlanInfeasibleError("в парке нет ни одного экземпляра БВС в статусе «Готов»")
 
+def _group_by_model_camera(eligible: list, spectrum: str) -> dict[tuple[str, str], list]:
+    """Группы «модель БВС + совместимая камера» среди готовых экземпляров.
+
+    Прежде отсюда возвращалась одна группа — самая многочисленная. Теперь
+    возвращаются все: ПЛН.ФТ.2 требует выбрать ту, что минимизирует критерий
+    задачи, а это видно только после полного расчёта каждой (см.
+    ``_pick_best_candidate``).
+    """
     groups: dict[tuple[str, str], list] = {}
     for inst in eligible:
         model = FLEET_MODELS.get(inst.model_key)
@@ -148,31 +150,140 @@ def _pick_model_group(survey_type: str, eligible: list) -> tuple[str, str, list]
         if camera_key is None:
             continue
         groups.setdefault((inst.model_key, camera_key), []).append(inst)
-
-    if not groups:
-        raise PlanInfeasibleError(
-            f"нет готовых БВС с нагрузкой, совместимой с типом съемки «{survey_type}»"
-        )
-
-    (model_key, camera_key), instances = max(groups.items(), key=lambda kv: len(kv[1]))
-    return model_key, camera_key, instances
+    return groups
 
 
-def _sortie_route_coords(sortie, start_point: Point) -> list[tuple[float, float]]:
-    """Собирает маршрут вылета: от площадки через галсы (каждый — в том
-    направлении, что ближе к текущему концу пути) и обратно на площадку.
-    Переходы — прямые линии (без учета препятствий, см. модуль ``visibility``)."""
-    coords: list[tuple[float, float]] = [(start_point.x, start_point.y)]
+def _nearest_site(point: Point, site_feats: list[dict], projector: Projector) -> tuple[Point, str] | None:
+    """Ближайшая к ``point`` (UTM) площадка — именно ближайшая, не первая в слое."""
+    best: tuple[float, Point, str] | None = None
+    for f in site_feats:
+        site_point = projector.to_utm(shape(f["geometry"]))
+        d = point.distance(site_point)
+        if best is None or d < best[0]:
+            best = (d, site_point, f["properties"].get("name") or "ВПП")
+    return (best[1], best[2]) if best else None
+
+
+def _instance_launch_point(
+    inst, launch_feats: list[dict], area_centroid: Point, projector: Projector
+) -> tuple[Point, str | None]:
+    """Площадка вылета и посадки конкретного экземпляра БВС.
+
+    У разных бортов одного парка она может быть разной: собственная локация
+    экземпляра, если она задана в парке; иначе ближайшая к области облёта ВПП
+    обстановки; если ВПП в обстановке нет вовсе — центроид рабочей области.
+    Отдельного шага «выбрать одну площадку на весь план» нет: борта летают
+    оттуда, где физически стоят.
+    """
+    if inst.location_lat is not None and inst.location_lon is not None:
+        point = projector.to_utm(Point(inst.location_lon, inst.location_lat))
+        return point, inst.base_launch_site
+    if launch_feats:
+        nearest = _nearest_site(area_centroid, launch_feats, projector)
+        if nearest:
+            return nearest
+    return area_centroid, None
+
+
+_MIN_LEG_LENGTH_M = 1.0  # переходы короче этого не показываем отдельным этапом расписания
+
+
+@dataclass(frozen=True)
+class RouteLeg:
+    """Один физический этап вылета — переход или сам галс.
+
+    Переход обходит запрещённые зоны через ``visibility.find_path``. Этапы
+    нужны дважды: чтобы честно посчитать налёт (переходы входят в бюджет) и
+    чтобы показать подробное расписание вылета (ИНТ.ФТ.15).
+    """
+
+    kind: str  # "transit" | "survey"
+    label: str
+    coords: list[tuple[float, float]]  # UTM, включая обе граничные точки
+    length_m: float
+    fallback: bool = False
+
+
+def _build_sortie_legs(
+    sortie: Sortie, start_point: Point, launch_name: str | None, restricted_zones: list[BaseGeometry]
+) -> list[RouteLeg]:
+    """Раскладывает вылет на этапы: взлёт и перелёт до зоны задания, каждый
+    галс, переходы между галсами, возврат и посадка.
+
+    Переходы обходят ``restricted_zones`` сеточным A*, если прямая их
+    пересекает. Сами галсы не проверяются — они лежат в рабочей области,
+    уже построенной без этих зон. Сумма ``length_m`` всех этапов и есть
+    фактический налёт вылета.
+    """
+    legs: list[RouteLeg] = []
     current = start_point
-    for track in sortie.tracks:
+    takeoff_label = (
+        f"Взлет с площадки «{launch_name}» и перелет до зоны выполнения задания"
+        if launch_name else "Взлет и перелет до зоны выполнения задания"
+    )
+    landing_label = f"Возврат и посадка на площадке «{launch_name}»" if launch_name else "Возврат на площадку"
+
+    for idx, track in enumerate(sortie.tracks):
         line_coords = list(track.geometry.coords)
         start_pt, end_pt = line_coords[0], line_coords[-1]
         if current.distance(Point(end_pt)) < current.distance(Point(start_pt)):
             line_coords = line_coords[::-1]
-        coords.extend(line_coords)
+        next_point = Point(line_coords[0])
+
+        transit = find_path(current, next_point, restricted_zones)
+        if transit.line.length > _MIN_LEG_LENGTH_M:
+            label = takeoff_label if idx == 0 else f"Переход к галсу {idx + 1}"
+            legs.append(RouteLeg("transit", label, list(transit.line.coords), transit.line.length, transit.fallback))
+
+        legs.append(RouteLeg("survey", f"Галс {idx + 1}", line_coords, LineString(line_coords).length))
         current = Point(line_coords[-1])
-    coords.append((start_point.x, start_point.y))
-    return coords
+
+    transit = find_path(current, start_point, restricted_zones)
+    if transit.line.length > _MIN_LEG_LENGTH_M:
+        legs.append(RouteLeg("transit", landing_label, list(transit.line.coords), transit.line.length, transit.fallback))
+
+    return legs
+
+
+@dataclass
+class _Candidate:
+    """Полностью рассчитанный план для одной группы «модель+камера» — один из
+    нескольких, между которыми выбирает ``_pick_best_candidate``."""
+
+    model_key: str
+    camera_key: str
+    model: UavModelSpec
+    survey_geometry: SurveyGeometry
+    cruise_speed: float
+    budget_s: float
+    plan_sorties: list[PlanSortie]
+    j1_s: float
+    j2_s: float
+    warnings: list[str]
+
+
+def _pick_best_candidate(candidates: list[_Candidate], criterion_alpha: float) -> _Candidate:
+    """ПЛН.ФТ.2: побеждает кандидат, минимизирующий критерий задачи —
+    нормированная взвешенная сумма ``J = α·J1/J1* + (1-α)·J2/J2*``.
+
+    ``J1*``/``J2*`` — лучшие значения среди уже посчитанных кандидатов, а не
+    теоретические оптимумы. При единственном кандидате сравнивать не с чем,
+    деление не выполняется вовсе. ``criterion_alpha`` уже однозначно кодирует
+    режим критерия (1.0 «Время», 0.0 «Налет», значение оператора для
+    «Компромисс»), поэтому режим отдельно не нужен.
+    """
+    if len(candidates) == 1:
+        return candidates[0]
+
+    j1_best = min(c.j1_s for c in candidates)
+    j2_best = min(c.j2_s for c in candidates)
+
+    def score(c: _Candidate) -> float:
+        j1_term = (c.j1_s / j1_best) if j1_best > 0 else 0.0
+        j2_term = (c.j2_s / j2_best) if j2_best > 0 else 0.0
+        return criterion_alpha * j1_term + (1 - criterion_alpha) * j2_term
+
+    return min(candidates, key=score)
 
 
 def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanSummary:
@@ -191,16 +302,21 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         raise PlanInfeasibleError("обстановка задачи содержит ошибки и недоступна для расчета")
 
     progress.stage("model")
-    model_key, camera_key, instances = _pick_model_group(
-        task.survey_type, fleet_service.eligible_instances(task.fleet_id)
-    )
-    model = FLEET_MODELS[model_key]
+    spectrum = _survey_type_spectrum(task.survey_type)
+    # Кандидаты берутся только из парка задачи, а не из всех загруженных:
+    # парк выбран оператором при постановке, совместимость с обстановкой уже
+    # проверена в task_service.
+    eligible = fleet_service.eligible_instances(task.fleet_id)
+    if not eligible:
+        raise PlanInfeasibleError(
+            f"в парке «{task.fleet_name}» нет ни одного экземпляра БВС в статусе «Готов»"
+        )
 
-    progress.stage("survey_geometry")
-    try:
-        survey_geometry = plan_survey_geometry(model_key, camera_key, task.gsd_cm)
-    except CameraError as exc:
-        raise PlanInfeasibleError(str(exc)) from exc
+    groups = _group_by_model_camera(eligible, spectrum)
+    if not groups:
+        raise PlanInfeasibleError(
+            f"нет готовых БВС с нагрузкой, совместимой с типом съемки «{task.survey_type}»"
+        )
 
     area_geom = shape(task.area)
     airspace_feats = _valid_features(env, "airspace")
@@ -237,104 +353,202 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         for i, f in enumerate(obstacle_feats)
     ]
 
-    progress.stage("working_area")
     validate_polygon(area_geom)
     area_utm = projector.to_utm(area_geom)
-    try:
-        working_area = compute_working_area(
-            area_utm, allowed_zones, no_fly_zones, obstacles, survey_geometry.height_m
-        )
-    except GeometryError as exc:
-        raise PlanInfeasibleError(str(exc)) from exc
+    area_centroid = area_utm.centroid
 
-    if working_area.is_empty:
-        raise PlanInfeasibleError("рабочая область пуста на высоте съемки — нет свободного места для галсов")
-
-    progress.stage("decomposition")
-    cells = boustrophedon_cells(working_area)
-    max_route_m = model.max_route_km * 1000.0 if model.max_route_km else float("inf")
-
-    # Первый из двух циклов, съедающих время на большой сцене, — отсюда и
-    # берется гранулярность прогресса, без правок внутри coverage.
-    raw_tracks: list[LineString] = []
-    for cell_index, cell in enumerate(cells):
-        progress.span("tracks", cell_index, len(cells), TRACKS_SPAN)
-        for track in generate_tracks(cell, survey_geometry.track_spacing_m):
-            raw_tracks.extend(split_long_track(track, max_route_m))
-
-    if not raw_tracks:
-        raise PlanInfeasibleError("рабочая область слишком мала для построения ни одного галса")
-
-    if launch_feats:
-        launch_point_utm = projector.to_utm(shape(launch_feats[0]["geometry"]))
-        launch_name = launch_feats[0]["properties"].get("name") or "ВПП"
-    else:
-        launch_point_utm = working_area.centroid
-        launch_name = None
-
-    wind_speed = task.wind_speed_ms or 0.0
-    cruise_speed = max(model.speed_ms.max_ms - wind_speed, MIN_EFFECTIVE_SPEED_MPS)
-    budget_s = flight_time_budget_s(model)
-
-    progress.stage("assignment")
-    vehicles = [Vehicle(id=inst.inventory_number, speed_mps=cruise_speed, budget_s=budget_s) for inst in instances]
-    track_objs = [Track(id=f"track-{i}", geometry=t) for i, t in enumerate(raw_tracks)]
-    routing_result = greedy_assign_and_split(track_objs, vehicles)
+    # Площадка вылета — своя у каждого экземпляра, и от группы «модель+камера»
+    # она не зависит: считается один раз на все кандидаты.
+    launch_by_inv: dict[str, tuple[Point, str | None]] = {
+        inst.inventory_number: _instance_launch_point(inst, launch_feats, area_centroid, projector)
+        for instances in groups.values()
+        for inst in instances
+    }
 
     lat, lon = area_geom.centroid.y, area_geom.centroid.x
     window_start_hour = _time_to_hours(task.window_start) or 0.0
     window_end_hour = _time_to_hours(task.window_end) or 24.0
 
-    plan_sorties: list[PlanSortie] = []
-    total_flight_s = 0.0
-    plan_start: datetime | None = None
-    plan_end: datetime | None = None
-
-    # Второй длинный цикл — по бортам; здесь же живет проверка отмены.
-    for vehicle_index, vehicle in enumerate(vehicles):
-        progress.span("schedule", vehicle_index, len(vehicles), SCHEDULE_SPAN)
-        sorties = routing_result.sorties_by_vehicle.get(vehicle.id, [])
+    def build_candidate(
+        model_key: str, camera_key: str, instances: list, tick: CandidateProgress
+    ) -> _Candidate:
+        model = FLEET_MODELS[model_key]
+        tick.stage("Геометрия съемки", 0.0)
         try:
-            scheduled = assign_timestamps(
-                sorties, lat, lon, task.work_date,
-                window_start_hour=window_start_hour, window_end_hour=window_end_hour,
-            )
-        except ScheduleError as exc:
+            survey_geometry = plan_survey_geometry(model_key, camera_key, task.gsd_cm)
+        except CameraError as exc:
             raise PlanInfeasibleError(str(exc)) from exc
 
-        for idx, sched in enumerate(scheduled):
-            route_coords = _sortie_route_coords(sched.sortie, launch_point_utm)
-            route_line_wgs84 = projector.to_wgs84(LineString(route_coords))
-            survey_tracks_wgs84 = projector.to_wgs84(
-                MultiLineString([t.geometry for t in sched.sortie.tracks])
+        # Зоны для обхода на переходах — те же контуры, что compute_working_area
+        # вычитает из рабочей области. Высота своя у каждого кандидата (зависит
+        # от камеры), поэтому ни restricted_zones, ни working_area между
+        # кандидатами переиспользовать нельзя.
+        restricted_zones: list[BaseGeometry] = [zone.footprint() for zone in no_fly_zones] + [
+            obstacle.footprint() for obstacle in obstacles if obstacle.is_hole_at(survey_geometry.height_m)
+        ]
+
+        tick.stage("Построение рабочей области", 0.10)
+        try:
+            working_area = compute_working_area(
+                area_utm, allowed_zones, no_fly_zones, obstacles, survey_geometry.height_m
             )
-            distance_m = sum(t.length_m for t in sched.sortie.tracks)
+        except GeometryError as exc:
+            raise PlanInfeasibleError(str(exc)) from exc
+        if working_area.is_empty:
+            raise PlanInfeasibleError("рабочая область пуста на высоте съемки — нет свободного места для галсов")
 
-            plan_sorties.append(PlanSortie(
-                uav_id=vehicle.id,
-                sortie_index=idx,
-                takeoff_site=launch_name,
-                landing_site=launch_name,
-                start_utc=sched.start_utc,
-                end_utc=sched.end_utc,
-                flight_time_s=sched.sortie.flight_time_s,
-                distance_m=distance_m,
-                track_geojson=mapping(route_line_wgs84),
-                survey_tracks_geojson=mapping(survey_tracks_wgs84),
-            ))
-            total_flight_s += sched.sortie.flight_time_s
-            plan_start = sched.start_utc if plan_start is None else min(plan_start, sched.start_utc)
-            plan_end = sched.end_utc if plan_end is None else max(plan_end, sched.end_utc)
+        tick.stage("Декомпозиция области", 0.20)
+        cells = boustrophedon_cells(working_area)
+        max_route_m = model.max_route_km * 1000.0 if model.max_route_km else float("inf")
 
-    j1_s = (plan_end - plan_start).total_seconds() if plan_start and plan_end else 0.0
-    j2_s = total_flight_s + SORTIE_PENALTY_S * len(plan_sorties)
+        raw_tracks: list[LineString] = []
+        for cell_index, cell in enumerate(cells):
+            tick.span("Построение галсов", cell_index, len(cells), (0.25, 0.50))
+            for track in generate_tracks(cell, survey_geometry.track_spacing_m):
+                raw_tracks.extend(split_long_track(track, max_route_m))
+        if not raw_tracks:
+            raise PlanInfeasibleError("рабочая область слишком мала для построения ни одного галса")
 
-    warnings: list[str] = []
-    if routing_result.unassigned_tracks:
-        warnings.append(
-            f"{len(routing_result.unassigned_tracks)} галс(ов) не удалось назначить ни одному БВС "
-            "(превышают бюджет вылета любого кандидата) — увеличьте состав группы или используйте другую модель"
+        wind_speed = task.wind_speed_ms or 0.0
+        cruise_speed = max(model.speed_ms.max_ms - wind_speed, MIN_EFFECTIVE_SPEED_MPS)
+        budget_s = flight_time_budget_s(model)
+
+        vehicles = [
+            Vehicle(
+                id=inst.inventory_number, speed_mps=cruise_speed, budget_s=budget_s,
+                launch_point=launch_by_inv[inst.inventory_number][0],
+            )
+            for inst in instances
+        ]
+        launch_name_by_vehicle = {
+            inst.inventory_number: launch_by_inv[inst.inventory_number][1] for inst in instances
+        }
+        track_objs = [Track(id=f"track-{i}", geometry=t) for i, t in enumerate(raw_tracks)]
+
+        tick.stage("Распределение по БВС", 0.50)
+        # Кластеризация по площадкам + TSP-тур + балансировка уже учитывают
+        # переходы при разбиении на вылеты, но оценивают их по прямой.
+        # Фактический маршрут в обход зон строится ниже, и налёт вылета
+        # пересчитывается по нему ДО расписания: световой день обязан
+        # укладывать настоящую длительность, а не приблизительную.
+        routing_result = cluster_assign_and_route(track_objs, vehicles)
+
+        sortie_legs: dict[int, list[RouteLeg]] = {}
+        any_transit_fallback = False
+        for vehicle_index, vehicle in enumerate(vehicles):
+            tick.span("Обход зон на переходах", vehicle_index, len(vehicles), (0.55, 0.80))
+            launch_name = launch_name_by_vehicle[vehicle.id]
+            for sortie in routing_result.sorties_by_vehicle.get(vehicle.id, []):
+                legs = _build_sortie_legs(sortie, vehicle.launch_point, launch_name, restricted_zones)
+                sortie.flight_time_s = sum(leg.length_m for leg in legs) / cruise_speed
+                sortie_legs[id(sortie)] = legs
+                if any(leg.fallback for leg in legs):
+                    any_transit_fallback = True
+
+        plan_sorties: list[PlanSortie] = []
+        total_flight_s = 0.0
+        plan_start: datetime | None = None
+        plan_end: datetime | None = None
+
+        for vehicle_index, vehicle in enumerate(vehicles):
+            tick.span("Расписание вылетов", vehicle_index, len(vehicles), (0.80, 0.98))
+            launch_name = launch_name_by_vehicle[vehicle.id]
+            sorties = routing_result.sorties_by_vehicle.get(vehicle.id, [])
+            try:
+                scheduled = assign_timestamps(
+                    sorties, lat, lon, task.work_date,
+                    window_start_hour=window_start_hour, window_end_hour=window_end_hour,
+                )
+            except ScheduleError as exc:
+                raise PlanInfeasibleError(str(exc)) from exc
+
+            for idx, sched in enumerate(scheduled):
+                legs = sortie_legs[id(sched.sortie)]
+
+                route_coords: list[tuple[float, float]] = []
+                phases: list[PlanSortiePhase] = []
+                # Курсор передаётся от этапа к этапу, а не пересчитывается из
+                # накопленной суммы секунд, — иначе соседние этапы расходятся
+                # на микросекунду.
+                cursor = sched.start_utc
+                for leg in legs:
+                    route_coords.extend(leg.coords if not route_coords else leg.coords[1:])
+                    phase_end = cursor + timedelta(seconds=leg.length_m / cruise_speed)
+                    phases.append(PlanSortiePhase(
+                        label=leg.label, kind=leg.kind, start_utc=cursor, end_utc=phase_end,
+                        distance_m=leg.length_m,
+                    ))
+                    cursor = phase_end
+                if phases:
+                    # sched.end_utc посчитан отдельно, из суммы длин за один
+                    # раз, — синхронизируем последний этап явно, чтобы не
+                    # осталось расхождения от разного порядка операций с float.
+                    phases[-1] = phases[-1].model_copy(update={"end_utc": sched.end_utc})
+
+                route_line_utm = LineString(route_coords)
+                route_line_wgs84 = projector.to_wgs84(route_line_utm)
+                survey_tracks_wgs84 = projector.to_wgs84(
+                    MultiLineString([t.geometry for t in sched.sortie.tracks])
+                )
+                # Длина всего маршрута (переходы в обход зон + галсы), а не
+                # только галсов: так честнее относительно карты.
+                distance_m = route_line_utm.length
+
+                plan_sorties.append(PlanSortie(
+                    uav_id=vehicle.id,
+                    sortie_index=idx,
+                    takeoff_site=launch_name,
+                    landing_site=launch_name,
+                    start_utc=sched.start_utc,
+                    end_utc=sched.end_utc,
+                    flight_time_s=sched.sortie.flight_time_s,
+                    distance_m=distance_m,
+                    track_geojson=mapping(route_line_wgs84),
+                    survey_tracks_geojson=mapping(survey_tracks_wgs84),
+                    phases=phases,
+                ))
+                total_flight_s += sched.sortie.flight_time_s
+                plan_start = sched.start_utc if plan_start is None else min(plan_start, sched.start_utc)
+                plan_end = sched.end_utc if plan_end is None else max(plan_end, sched.end_utc)
+
+        j1_s = (plan_end - plan_start).total_seconds() if plan_start and plan_end else 0.0
+        j2_s = total_flight_s + SORTIE_PENALTY_S * len(plan_sorties)
+
+        warnings: list[str] = []
+        if routing_result.unassigned_tracks:
+            warnings.append(
+                f"{len(routing_result.unassigned_tracks)} галс(ов) не удалось назначить ни одному БВС "
+                "(превышают бюджет вылета любого кандидата) — увеличьте состав группы или используйте другую модель"
+            )
+        if any_transit_fallback:
+            warnings.append(
+                "на одном или нескольких переходах не удалось найти маршрут в обход бесполетной зоны/препятствия "
+                "(слишком узкий проход для разрешения сетки поиска) — использована прямая линия; "
+                "пересечение проверит модуль «Проверка безопасности»"
+            )
+
+        return _Candidate(
+            model_key=model_key, camera_key=camera_key, model=model, survey_geometry=survey_geometry,
+            cruise_speed=cruise_speed, budget_s=budget_s, plan_sorties=plan_sorties,
+            j1_s=j1_s, j2_s=j2_s, warnings=warnings,
         )
+
+    candidates: list[_Candidate] = []
+    failures: list[str] = []
+    for index, ((model_key, camera_key), instances) in enumerate(groups.items()):
+        tick = CandidateProgress(progress, FLEET_MODELS[model_key].name, index, len(groups))
+        try:
+            candidates.append(build_candidate(model_key, camera_key, instances, tick))
+        except PlanInfeasibleError as exc:
+            failures.append(f"{FLEET_MODELS[model_key].name}: {exc}")
+
+    if not candidates:
+        raise PlanInfeasibleError(
+            "ни одна из подходящих по нагрузке моделей БВС не позволяет рассчитать план: "
+            + "; ".join(failures)
+        )
+
+    best = _pick_best_candidate(candidates, task.criterion_alpha)
 
     progress.stage("save")
     plan_id = str(uuid.uuid4())
@@ -346,19 +560,19 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         created_at=datetime.now(timezone.utc),
         criterion_mode=task.criterion_mode,
         criterion_alpha=task.criterion_alpha,
-        j1_s=j1_s,
-        j2_s=j2_s,
+        j1_s=best.j1_s,
+        j2_s=best.j2_s,
         is_optimal=False,
-        uav_model=model.name,
-        sortie_count=len(plan_sorties),
-        warnings=warnings,
-        model_key=model_key,
-        camera_key=camera_key,
-        height_m=survey_geometry.height_m,
-        swath_m=survey_geometry.swath_m,
-        cruise_speed_mps=cruise_speed,
-        budget_s=budget_s,
-        sorties=plan_sorties,
+        uav_model=best.model.name,
+        sortie_count=len(best.plan_sorties),
+        warnings=best.warnings,
+        model_key=best.model_key,
+        camera_key=best.camera_key,
+        height_m=best.survey_geometry.height_m,
+        swath_m=best.survey_geometry.swath_m,
+        cruise_speed_mps=best.cruise_speed,
+        budget_s=best.budget_s,
+        sorties=best.plan_sorties,
     )
     repositories.plans.add(detail)
     task_service.mark_calculated(task.id)
@@ -366,8 +580,11 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         log.info(
             "план рассчитан",
             extra={
-                "version": version, "uav_model": model_key, "sortie_count": len(plan_sorties),
-                "j1_s": round(j1_s, 1), "j2_s": round(j2_s, 1), "warnings": len(warnings),
+                "version": version, "uav_model": best.model_key,
+                "candidates": len(candidates), "rejected": len(failures),
+                "sortie_count": len(best.plan_sorties),
+                "j1_s": round(best.j1_s, 1), "j2_s": round(best.j2_s, 1),
+                "warnings": len(best.warnings),
             },
         )
     return _to_summary(detail)

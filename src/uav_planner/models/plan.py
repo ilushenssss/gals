@@ -68,6 +68,9 @@ class Plan(Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     confirmed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     exported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Подтверждён вопреки нарушениям — оператор пометил принятыми все нарушения
+    # последнего отчёта (расширение ЭКС.ФТ.2 по запросу пользователя).
+    confirmed_with_overrides: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Заявленные параметры расчета — независимая проверка безопасности сверяет
     # маршруты именно с ними, не заглядывая внутрь решателя.
@@ -124,6 +127,10 @@ class PlanSortie(Base):
     # покрытия обязана смотреть на галсы, а не на весь трек.
     route_geom = mapped_column(Geometry("LINESTRING", srid=4326), nullable=False)
     survey_tracks_geom = mapped_column(Geometry("MULTILINESTRING", srid=4326), nullable=False)
+    # Этапы вылета (перелёт/галс/переход/возврат) с временами и длинами —
+    # структура целиком задаётся расчётом и будет меняться, поэтому jsonb,
+    # а не таблица.
+    phases: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
 
     plan: Mapped[Plan] = relationship(back_populates="sorties")
 
