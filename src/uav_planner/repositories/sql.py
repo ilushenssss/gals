@@ -266,6 +266,38 @@ class SafetyRepository:
             raise KeyError(report_id)
         return mappers.safety_report_from_row(row)
 
+    def set_violation_ignored(self, report_id: str, violation_id: str, ignored: bool) -> SafetyReport | None:
+        """Отмечает одно нарушение принятым (или снимает отметку).
+
+        Возвращает ``None``, если нарушения с таким id в отчёте нет: отчёты
+        пересобираются при каждой проверке, и ссылка могла устареть.
+        Отметка живёт в той же jsonb-колонке, что и само нарушение, поэтому
+        переживает рестарт — оператор не должен расставлять галочки заново.
+        """
+        key = _uuid_or_none(report_id)
+        row = current_session().get(SafetyReportRow, key) if key else None
+        if row is None:
+            raise KeyError(report_id)
+
+        found = False
+        for check in row.checks:
+            violations = [dict(v) for v in (check.violations or [])]
+            hit = False
+            for violation in violations:
+                if violation.get("id") == violation_id:
+                    violation["ignored"] = ignored
+                    hit = True
+            if hit:
+                # JSONB меняется только при подмене объекта целиком — мутация
+                # вложенного списка на месте не отслеживается.
+                check.violations = violations
+                found = True
+        if not found:
+            return None
+
+        current_session().flush()
+        return mappers.safety_report_from_row(row)
+
     def latest_report(self, plan_id: str) -> SafetyReport | None:
         key = _uuid_or_none(plan_id)
         if key is None:

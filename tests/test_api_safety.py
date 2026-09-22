@@ -196,5 +196,152 @@ def test_violation_names_the_uav_and_sortie(client):
     plan = client.get(f"/api/plans/{report['plan_id']}").json()
     uav_id = plan["sorties"][0]["uav_id"]
     assert all(
-        v.startswith(f"{uav_id} · вылет ") for v in geozones["violations"] if not v.startswith("...")
+        v["message"].startswith(f"{uav_id} · вылет ")
+        for v in geozones["violations"]
+        if not v["message"].startswith("...")
     ), geozones["violations"]
+
+
+def test_violations_carry_wgs84_coordinates_for_map_markers(client):
+    # Каждое нарушение "геозон" — точка на реальном маршруте, поэтому у нее
+    # должны быть координаты (для отметки на карте и подсветки, ИНТ.ФТ.14-15).
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    geozones = next(c for c in report["checks"] if c["name"] == "geozones")
+    assert geozones["violations"]
+    for v in geozones["violations"]:
+        if v["message"].startswith("..."):
+            continue  # сводная строка "...и еще N нарушений" — без точки
+        assert v["lat"] is not None and v["lon"] is not None
+        assert 54.0 < v["lat"] < 57.0  # в разумных пределах сцены (широта)
+        assert 37.0 < v["lon"] < 38.0  # долгота
+
+
+def test_astar_avoids_small_no_fly_zone_so_safety_check_passes(client):
+    # Небольшая БПЗ прямо на пути от ВПП к области облета — в отличие от
+    # непроходимой "стены" выше, ее можно обойти локальным A*
+    # (uav_planner.visibility.find_path), и независимая проверка не должна
+    # находить нарушения геозон.
+    features = [
+        {
+            "type": "Feature",
+            "properties": {"layer": "airspace", "h_min": 0, "h_max": 300},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.55, 55.70, 0.10, 0.01)},
+        },
+        {
+            "type": "Feature",
+            "properties": {"layer": "launch_site", "name": "ВПП-1"},
+            "geometry": {"type": "Point", "coordinates": [37.56, 55.705]},
+        },
+        {
+            "type": "Feature",
+            "properties": {"layer": "no_fly", "safety_buffer_m": 0},
+            "geometry": {"type": "Polygon", "coordinates": square_coords(37.570, 55.7045, 0.003, 0.002)},
+        },
+    ]
+    scene = {"type": "FeatureCollection", "features": features}
+    resp = client.post(
+        "/api/environments",
+        data={"name": "Обстановка с малой БПЗ"},
+        files={"file": ("scene.geojson", io.BytesIO(json.dumps(scene).encode("utf-8")), "application/json")},
+    )
+    assert resp.status_code == 200, resp.text
+    env_id = resp.json()["id"]
+
+    fleet_id = _upload_fleet(client, n=1)
+    task_id = _create_task(client, env_id, fleet_id)
+    plan = client.post("/api/plans", data={"task_id": task_id}).json()
+    detail = client.get(f"/api/plans/{plan['id']}").json()
+    assert detail["warnings"] == []
+
+    report = client.post("/api/safety-checks", data={"plan_id": plan["id"]}).json()
+    geozones = next(c for c in report["checks"] if c["name"] == "geozones")
+    assert geozones["passed"] is True
+    assert report["status"] == "Пройдена"
+
+
+def _first_violation(report):
+    for c in report["checks"]:
+        for v in c["violations"]:
+            if not v["message"].startswith("..."):
+                return v
+    raise AssertionError("в отчёте нет нарушений")
+
+
+def test_violations_each_get_a_stable_id(client):
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    v = _first_violation(report)
+    assert v["id"]
+    assert v["ignored"] is False
+    assert report["violations_acknowledged"] is False
+
+
+def test_ignoring_one_of_several_violations_does_not_acknowledge_the_report(client):
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    all_violation_ids = [
+        v["id"] for c in report["checks"] for v in c["violations"] if not v["message"].startswith("...")
+    ]
+    assert len(all_violation_ids) >= 1
+
+    updated = client.post(
+        f"/api/safety-checks/{report['id']}/violations/{all_violation_ids[0]}/ignore",
+        data={"ignored": "true"},
+    ).json()
+    if len(all_violation_ids) > 1:
+        assert updated["violations_acknowledged"] is False
+    else:
+        assert updated["violations_acknowledged"] is True
+
+
+def test_ignoring_all_violations_acknowledges_the_report(client):
+    # Включая сводную строку "...и еще N нарушени(й)", если она есть — это тоже
+    # отдельная запись violations с собственным id, ее тоже нужно принять явно.
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    all_violation_ids = [v["id"] for c in report["checks"] for v in c["violations"]]
+
+    updated = report
+    for vid in all_violation_ids:
+        resp = client.post(
+            f"/api/safety-checks/{report['id']}/violations/{vid}/ignore", data={"ignored": "true"},
+        )
+        assert resp.status_code == 200, resp.text
+        updated = resp.json()
+
+    assert updated["violations_acknowledged"] is True
+    for c in updated["checks"]:
+        for v in c["violations"]:
+            assert v["ignored"] is True
+
+    # Снятие галочки с одного нарушения снова блокирует подтверждение отчета.
+    unignored = client.post(
+        f"/api/safety-checks/{report['id']}/violations/{all_violation_ids[0]}/ignore",
+        data={"ignored": "false"},
+    ).json()
+    assert unignored["violations_acknowledged"] is False
+
+    # Возвращаем как было, чтобы get_latest_report тоже отражал финальное состояние.
+    client.post(
+        f"/api/safety-checks/{report['id']}/violations/{all_violation_ids[0]}/ignore",
+        data={"ignored": "true"},
+    )
+    fetched = client.get("/api/safety-checks/latest", params={"plan_id": report["plan_id"]}).json()
+    assert fetched["violations_acknowledged"] is True
+
+
+def test_ignoring_unknown_violation_returns_404(client):
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    resp = client.post(
+        f"/api/safety-checks/{report['id']}/violations/does-not-exist/ignore", data={"ignored": "true"},
+    )
+    assert resp.status_code == 404
+
+
+def test_ignoring_violation_of_unknown_report_returns_404(client):
+    resp = client.post(
+        "/api/safety-checks/does-not-exist/violations/geozones__0/ignore", data={"ignored": "true"},
+    )
+    assert resp.status_code == 404

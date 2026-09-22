@@ -13,7 +13,7 @@ from uav_planner import repositories
 from uav_planner.api.schemas.environment import EnvironmentDetail, LayerCounts, ValidationIssue
 from uav_planner.api.schemas.fleet import FleetDetail, FleetInstance
 from uav_planner.api.schemas.plan import PlanDetail, PlanSortie
-from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport
+from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport, ViolationOut
 from uav_planner.api.schemas.task import TaskDetail
 from uav_planner.db.geo import from_db_geojson, to_db, to_db_multiline
 
@@ -337,7 +337,10 @@ def _report(plan_id=PLAN_ID, status="Есть нарушения", attempts=0):
         status=status,
         auto_recalc_count=attempts,
         checks=[
-            SafetyCheckOut(name="geozones", label="Геозоны", passed=False, violations=["пересечение"]),
+            SafetyCheckOut(
+                name="geozones", label="Геозоны", passed=False,
+                violations=[ViolationOut(id="geozones__0", message="пересечение", lat=55.75, lon=37.6)],
+            ),
             SafetyCheckOut(name="energy", label="Энергия", passed=True, violations=[]),
         ],
     )

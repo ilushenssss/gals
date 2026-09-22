@@ -27,7 +27,7 @@ from uav_planner.api.schemas.environment import (
 from uav_planner.api.schemas.fleet import FleetDetail, FleetInstance, FleetIssue
 from uav_planner.api.schemas.job import JobInfo
 from uav_planner.api.schemas.plan import PlanDetail, PlanSortie, PlanSortiePhase
-from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport
+from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport, ViolationOut
 from uav_planner.api.schemas.task import TaskDetail
 from uav_planner.db.geo import from_db_geojson, to_db, to_db_multiline
 from uav_planner.models.environment import (
@@ -371,13 +371,25 @@ def safety_report_to_rows(report: SafetyReport, requested_plan_id: str) -> Safet
                 name=check.name,
                 label=check.label,
                 passed=check.passed,
-                violations=list(check.violations),
+                violations=[v.model_dump(mode="json") for v in check.violations],
             )
         )
     return row
 
 
 def safety_report_from_row(row: SafetyReportRow) -> SafetyReport:
+    checks = [
+        SafetyCheckOut(
+            name=c.name,
+            label=c.label,
+            passed=c.passed,
+            violations=[ViolationOut(**v) for v in (c.violations or [])],
+        )
+        for c in sorted(row.checks, key=lambda c: c.ordinal)
+    ]
+    # Признак «все нарушения приняты» выводится из самих нарушений, а не
+    # хранится колонкой: иначе флаг и список могли бы разойтись.
+    all_violations = [v for c in checks for v in c.violations]
     return SafetyReport(
         id=str(row.id),
         plan_id=str(row.plan_id),
@@ -385,12 +397,8 @@ def safety_report_from_row(row: SafetyReportRow) -> SafetyReport:
         created_at=row.created_at,
         status=row.status,
         auto_recalc_count=row.auto_recalc_count,
-        checks=[
-            SafetyCheckOut(
-                name=c.name, label=c.label, passed=c.passed, violations=list(c.violations)
-            )
-            for c in sorted(row.checks, key=lambda c: c.ordinal)
-        ],
+        checks=checks,
+        violations_acknowledged=bool(all_violations) and all(v.ignored for v in all_violations),
     )
 
 

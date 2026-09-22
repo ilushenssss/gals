@@ -73,3 +73,21 @@ def get_latest_safety_check(plan_id: str) -> SafetyReport:
         return safety_service.get_latest_report(plan_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/safety-checks/{report_id}/violations/{violation_id}/ignore",
+    response_model=SafetyReport,
+)
+def ignore_violation(report_id: str, violation_id: str, ignored: bool = Form(...)) -> SafetyReport:
+    """Оператор принимает риск конкретного нарушения (или снимает отметку).
+
+    Если так отмечены все нарушения отчёта, план можно подтвердить вопреки
+    ЭКС.ФТ.2 — расширение по запросу пользователя.
+    """
+    try:
+        return safety_service.set_violation_ignored(report_id, violation_id, ignored)
+    except safety_service.ViolationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KeyError:
+        raise HTTPException(status_code=404, detail="отчет проверки не найден")

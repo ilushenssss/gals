@@ -84,7 +84,9 @@ class SafetyCheck(Base):
     name: Mapped[str] = mapped_column(String(32), nullable=False)
     label: Mapped[str] = mapped_column(Text, nullable=False)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    violations: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    # Объекты ViolationOut (id/message/lat/lon/ignored), а не строки: структуру
+    # задаёт схема API и она будет меняться, поэтому jsonb без миграции типа.
+    violations: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
 
     report: Mapped[SafetyReport] = relationship(back_populates="checks")
 

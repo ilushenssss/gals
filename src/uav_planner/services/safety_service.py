@@ -15,7 +15,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from shapely.geometry import shape
+from shapely.geometry import Point, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
@@ -36,6 +36,7 @@ from uav_planner.logging_setup import log_context
 from uav_planner.safety import (
     CheckResult,
     SortieTrack,
+    Violation,
     check_allowed_space,
     check_coverage,
     check_daylight,
@@ -49,7 +50,7 @@ from . import plan_service
 from . import environment_service
 from . import task_service
 from uav_planner.api.schemas.plan import PlanDetail
-from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport
+from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport, ViolationOut
 
 log = logging.getLogger(__name__)
 
@@ -89,21 +90,40 @@ def sortie_label(sortie) -> str:
     return f"{sortie.uav_id} · вылет {sortie.sortie_index + 1}"
 
 
-def _combine(name: str, results: list[tuple[str | None, CheckResult]]) -> SafetyCheckOut:
-    violations: list[str] = []
+def _violation_out(v: Violation, projector: Projector, violation_id: str) -> ViolationOut:
+    """Нарушение ядра -> нарушение контракта API: точка перепроецируется из
+    UTM в WGS-84, чтобы интерфейс мог поставить маркер на карту."""
+    if v.point is None:
+        return ViolationOut(id=violation_id, message=v.message)
+    wgs = projector.to_wgs84(v.point)
+    return ViolationOut(id=violation_id, message=v.message, lat=wgs.y, lon=wgs.x)
+
+
+def _combine(
+    name: str, results: list[tuple[str | None, CheckResult]], projector: Projector
+) -> SafetyCheckOut:
+    """Сводит результаты по всем вылетам в одну проверку отчёта.
+
+    Подпись вылета приписывается к тексту нарушения здесь же: чистые проверки
+    работают с геометрией и не знают, чей это вылет (БЕЗ.ФТ.4). Координата при
+    этом остаётся своя у каждого нарушения — по ней и ставится маркер.
+    """
+    labelled: list[Violation] = []
     for label, r in results:
-        # Проверки ядра отдают Violation(message, point); точка понадобится на
-        # шаге 5 слияния (структурный ViolationOut с координатами для карты),
-        # здесь пока берётся только текст.
-        violations.extend(
-            f"{label}: {v.message}" if label else v.message for v in r.violations
-        )
-    unique = list(dict.fromkeys(violations))
-    shown = unique[:5]
+        for v in r.violations:
+            labelled.append(Violation(f"{label}: {v.message}" if label else v.message, v.point))
+
+    unique: dict[str, Violation] = {}
+    for v in labelled:
+        unique.setdefault(v.message, v)
+    shown = list(unique.values())[:5]
     if len(unique) > 5:
-        shown.append(f"...и еще {len(unique) - 5} нарушени(й)")
+        shown.append(Violation(f"...и еще {len(unique) - 5} нарушени(й)"))
     passed = all(r.passed for _, r in results) if results else True
-    return SafetyCheckOut(name=name, label=_LABELS[name], passed=passed, violations=shown)
+    return SafetyCheckOut(
+        name=name, label=_LABELS[name], passed=passed,
+        violations=[_violation_out(v, projector, f"{name}__{i}") for i, v in enumerate(shown)],
+    )
 
 
 def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
@@ -175,13 +195,16 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
 
         if allowed_union is None:
             airspace_results.append((None, CheckResult("airspace", False, (
-                "в обстановке нет ни одной зоны разрешенного воздушного пространства",
+                Violation(
+                    "в обстановке нет ни одной зоны разрешенного воздушного пространства",
+                    Point(route_utm.coords[0]),
+                ),
             ))))
         else:
             airspace_results.append((label, check_allowed_space(route_utm, allowed_union)))
 
         energy_results.append(
-            (label, check_energy(route_utm.length, plan.cruise_speed_mps, plan.budget_s))
+            (label, check_energy(route_utm.length, plan.cruise_speed_mps, plan.budget_s, route=route_utm))
         )
         reachability_results.append((
             label,
@@ -190,7 +213,8 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         daylight_results.append((
             label,
             check_daylight(
-                sortie.start_utc, sortie.end_utc, lat, lon, window_start_hour, window_end_hour
+                sortie.start_utc, sortie.end_utc, lat, lon, window_start_hour, window_end_hour,
+                location=Point(route_utm.coords[0]),
             ),
         ))
         sortie_tracks.append(SortieTrack(
@@ -205,18 +229,32 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         )
         coverage_result = check_coverage(all_survey_tracks_utm, working_area, plan.swath_m)
     except GeometryError as exc:
-        coverage_result = CheckResult("coverage", False, (f"не удалось пересчитать рабочую область: {exc}",))
+        coverage_result = CheckResult(
+            "coverage", False, (Violation(f"не удалось пересчитать рабочую область: {exc}"),)
+        )
 
     separation_result = check_separation(sortie_tracks)
 
     return [
-        _combine("geozones", geozone_results),
-        _combine("airspace", airspace_results),
-        _combine("energy", energy_results),
-        _combine("reachability", reachability_results),
-        SafetyCheckOut(name="coverage", label=_LABELS["coverage"], passed=coverage_result.passed, violations=[v.message for v in coverage_result.violations]),
-        _combine("daylight", daylight_results),
-        SafetyCheckOut(name="separation", label=_LABELS["separation"], passed=separation_result.passed, violations=[v.message for v in separation_result.violations]),
+        _combine("geozones", geozone_results, projector),
+        _combine("airspace", airspace_results, projector),
+        _combine("energy", energy_results, projector),
+        _combine("reachability", reachability_results, projector),
+        SafetyCheckOut(
+            name="coverage", label=_LABELS["coverage"], passed=coverage_result.passed,
+            violations=[
+                _violation_out(v, projector, f"coverage__{i}")
+                for i, v in enumerate(coverage_result.violations)
+            ],
+        ),
+        _combine("daylight", daylight_results, projector),
+        SafetyCheckOut(
+            name="separation", label=_LABELS["separation"], passed=separation_result.passed,
+            violations=[
+                _violation_out(v, projector, f"separation__{i}")
+                for i, v in enumerate(separation_result.violations)
+            ],
+        ),
     ]
 
 
@@ -333,3 +371,37 @@ def get_latest_report(plan_id: str) -> SafetyReport:
     if report is None:
         raise KeyError(f"для плана {plan_id} еще не выполнялась проверка безопасности")
     return report
+
+
+class ViolationNotFoundError(KeyError):
+    """Нарушения с таким id в отчёте нет — например, ссылка устарела: отчёт
+    пересобирается при каждой проверке, и прежние идентификаторы не
+    сохраняются (см. ``set_violation_ignored``)."""
+
+
+def set_violation_ignored(report_id: str, violation_id: str, ignored: bool) -> SafetyReport:
+    """Оператор осознанно принимает риск конкретного нарушения (или снимает
+    отметку).
+
+    Расширение поверх ЭКС.ФТ.2 по запросу пользователя: план с нарушениями
+    подтвердить нельзя, но если оператор отметил принятым КАЖДОЕ нарушение
+    отчёта, подтверждение разблокируется (``SafetyReport.violations_acknowledged``).
+
+    Область действия — конкретный отчёт, а не план или его версия: новый
+    расчёт и повторная проверка (БЕЗ.ФТ.3/ФТ.6) строят отчёт заново, и отметки
+    не переносятся. Это решение, а не недоработка: принятый риск для одних
+    условий не должен молча считаться принятым для другого результата.
+    """
+    updated = repositories.safety.set_violation_ignored(report_id, violation_id, ignored)
+    if updated is None:
+        raise ViolationNotFoundError(
+            f"нарушение {violation_id} не найдено в отчете {report_id}"
+        )
+    log.info(
+        "отметка принятия нарушения изменена",
+        extra={
+            "report_id": report_id, "violation_id": violation_id, "ignored": ignored,
+            "violations_acknowledged": updated.violations_acknowledged,
+        },
+    )
+    return updated
