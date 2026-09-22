@@ -47,10 +47,23 @@ def _upload_fleet(client, n=1, model="geoscan-gemini", status="Готов", name
     return resp.json()["id"]
 
 
-def _create_task(client, env_id, **overrides):
+def _default_fleet_id(client):
+    """Парк по умолчанию — единственный загруженный тестом.
+
+    Задача обязана называть парк, но большинству тестов этих модулей всё равно
+    какой: они проверяют расчёт, а не выбор парка. Кому важно — передаёт
+    fleet_id явно.
+    """
+    fleets = client.get("/api/fleets").json()
+    assert fleets, "перед созданием задачи нужно загрузить парк (_upload_fleet)"
+    return fleets[0]["id"]
+
+
+def _create_task(client, env_id, fleet_id=None, **overrides):
     form = {
         "name": "Задача 1",
         "environment_id": env_id,
+        "fleet_id": fleet_id or _default_fleet_id(client),
         "survey_type": "RGB",
         "gsd_cm": "3.0",
         "work_date": "2026-06-15",
@@ -121,12 +134,16 @@ def test_second_calculation_creates_new_version(client):
     assert [v["version"] for v in versions] == [2, 1]
 
 
-def test_plan_without_fleet_is_infeasible(client):
+def test_plan_with_no_ready_instances_is_infeasible(client):
+    # Парк существует — задачу с ним создать можно, готовность экземпляров к
+    # совместимости по расстоянию отношения не имеет. Но ни один борт не
+    # «Готов», и расчёт невыполним именно по этой причине.
     env_id = _upload_environment(client)
-    task_id = _create_task(client, env_id)
+    fleet_id = _upload_fleet(client, status="На обслуживании")
+    task_id = _create_task(client, env_id, fleet_id)
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 422
-    assert "парк" in resp.json()["detail"]
+    assert "Готов" in resp.json()["detail"]
 
 
 def test_plan_with_incompatible_survey_type_is_infeasible(client):

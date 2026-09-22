@@ -54,10 +54,23 @@ def _upload_fleet(client, n=1, model="geoscan-gemini", status="Готов", name
     return resp.json()["id"]
 
 
-def _create_task(client, env_id, **overrides):
+def _default_fleet_id(client):
+    """Парк по умолчанию — единственный загруженный тестом.
+
+    Задача обязана называть парк, но большинству тестов этих модулей всё равно
+    какой: они проверяют расчёт, а не выбор парка. Кому важно — передаёт
+    fleet_id явно.
+    """
+    fleets = client.get("/api/fleets").json()
+    assert fleets, "перед созданием задачи нужно загрузить парк (_upload_fleet)"
+    return fleets[0]["id"]
+
+
+def _create_task(client, env_id, fleet_id=None, **overrides):
     form = {
         "name": "Задача 1",
         "environment_id": env_id,
+        "fleet_id": fleet_id or _default_fleet_id(client),
         "survey_type": "RGB",
         "gsd_cm": "3.0",
         "work_date": "2026-06-15",

@@ -68,7 +68,8 @@ def _create_task(client, env_id):
     resp = client.post(
         "/api/tasks",
         data={
-            "name": "Задача 1", "environment_id": env_id, "survey_type": "RGB",
+            "name": "Задача 1", "environment_id": env_id,
+            "fleet_id": client.get("/api/fleets").json()[0]["id"], "survey_type": "RGB",
             "gsd_cm": "3.0", "work_date": "2026-06-15", "criterion_mode": "Время",
         },
         files={"area_file": ("area.geojson", io.BytesIO(json.dumps(area).encode("utf-8")), "application/json")},

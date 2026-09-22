@@ -223,6 +223,7 @@ def apply_task(row: Task, detail: TaskDetail) -> Task:
     """Записывает поля схемы в строку — и для вставки, и для обновления."""
     row.id = as_uuid(detail.id)
     row.environment_id = as_uuid(detail.environment_id)
+    row.fleet_id = as_uuid(detail.fleet_id)
     for column in TASK_COLUMNS:
         setattr(row, column, getattr(detail, column))
     row.area = detail.area
@@ -237,6 +238,8 @@ def task_from_row(row: Task) -> TaskDetail:
         name=row.name,
         environment_id=str(row.environment_id),
         environment_name=row.environment.name,
+        fleet_id=str(row.fleet_id),
+        fleet_name=row.fleet.name,
         survey_type=row.survey_type,
         work_date=row.work_date,
         status=row.status,

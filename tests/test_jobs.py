@@ -52,9 +52,9 @@ def _upload_environment(client, no_fly=False):
     return resp.json()["id"]
 
 
-def _upload_fleet(client, n=1, model="geoscan-gemini", name="Парк"):
+def _upload_fleet(client, n=1, model="geoscan-gemini", name="Парк", status="Готов"):
     records = [
-        {"inventory_number": f"{model}-{i}", "model": model, "status": "Готов",
+        {"inventory_number": f"{model}-{i}", "model": model, "status": status,
          "location_lat": 55.705, "location_lon": 37.56}
         for i in range(n)
     ]
@@ -67,10 +67,23 @@ def _upload_fleet(client, n=1, model="geoscan-gemini", name="Парк"):
     return resp.json()["id"]
 
 
-def _create_task(client, env_id, **overrides):
+def _default_fleet_id(client):
+    """Парк по умолчанию — единственный загруженный тестом.
+
+    Задача обязана называть парк, но большинству тестов этих модулей всё равно
+    какой: они проверяют расчёт, а не выбор парка. Кому важно — передаёт
+    fleet_id явно.
+    """
+    fleets = client.get("/api/fleets").json()
+    assert fleets, "перед созданием задачи нужно загрузить парк (_upload_fleet)"
+    return fleets[0]["id"]
+
+
+def _create_task(client, env_id, fleet_id=None, **overrides):
     form = {
         "name": "Задача 1",
         "environment_id": env_id,
+        "fleet_id": fleet_id or _default_fleet_id(client),
         "survey_type": "RGB",
         "gsd_cm": "3.0",
         "work_date": "2026-06-15",
@@ -167,13 +180,17 @@ def test_plan_run_with_zero_wait_returns_200_if_the_run_was_instant(client):
 
 
 def test_infeasible_task_fails_the_job_and_returns_422(client):
-    """ПЛН.ФТ.10 через очередь: невыполнимость — исход работы, а не сбой."""
-    env_id = _upload_environment(client)  # парк не загружен
-    task_id = _create_task(client, env_id)
+    """ПЛН.ФТ.10 через очередь: невыполнимость — исход работы, а не сбой.
+
+    Парк у задачи есть (он обязателен), но ни один борт не «Готов».
+    """
+    env_id = _upload_environment(client)
+    fleet_id = _upload_fleet(client, status="На обслуживании")
+    task_id = _create_task(client, env_id, fleet_id)
 
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 422
-    assert "парк" in resp.json()["detail"]
+    assert "Готов" in resp.json()["detail"]
 
     job = client.get("/api/plan-jobs", params={"task_id": task_id}).json()[0]
     assert job["status"] == "Ошибка"

@@ -32,6 +32,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from uav_planner.db.base import Base
 from .environment import Environment
+from .fleet import FleetUpload
 
 TASK_STATUSES = ("Черновик", "Рассчитана", "Подтверждена")
 SURVEY_TYPES = ("RGB", "мультиспектральная", "ИК", "LiDAR", "геофизическая")
@@ -45,6 +46,11 @@ class Task(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     environment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("environments.id", ondelete="RESTRICT"), nullable=False
+    )
+    # Парк выбирается при постановке задачи и потом не меняется: RESTRICT, как
+    # и у обстановки — удалить парк, по которому считали планы, нельзя.
+    fleet_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fleet_uploads.id", ondelete="RESTRICT"), nullable=False
     )
     survey_type: Mapped[str] = mapped_column(String(32), nullable=False)
     gsd_cm: Mapped[float] = mapped_column(Float, nullable=False)
@@ -70,6 +76,7 @@ class Task(Base):
     # environment_name входит в ответ API (ЗАД.ФТ.6), но не хранится копией:
     # переименование обстановки должно быть видно в списке задач сразу.
     environment: Mapped[Environment] = relationship(lazy="joined")
+    fleet: Mapped[FleetUpload] = relationship(lazy="joined")
 
     __table_args__ = (
         CheckConstraint(
@@ -82,5 +89,6 @@ class Task(Base):
             name="window_order",
         ),
         Index("ix_tasks_environment_id", "environment_id"),
+        Index("ix_tasks_fleet_id", "fleet_id"),
         Index("ix_tasks_updated_at", "updated_at"),
     )

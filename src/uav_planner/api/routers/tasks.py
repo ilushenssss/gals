@@ -49,6 +49,7 @@ async def _read_area_geojson(area_file: UploadFile) -> dict:
 async def create_task(
     name: str = Form(...),
     environment_id: str = Form(...),
+    fleet_id: str = Form(...),
     survey_type: str = Form(...),
     gsd_cm: float = Form(...),
     work_date: date = Form(...),
@@ -64,7 +65,7 @@ async def create_task(
     area_geojson = await _read_area_geojson(area_file)
     try:
         return task_service.create_task(
-            name=name, environment_id=environment_id, survey_type=survey_type, gsd_cm=gsd_cm,
+            name=name, environment_id=environment_id, fleet_id=fleet_id, survey_type=survey_type, gsd_cm=gsd_cm,
             work_date=work_date, window_start=_parse_time(window_start), window_end=_parse_time(window_end),
             wind_speed_ms=wind_speed_ms, cloud_cover_pct=cloud_cover_pct, criterion_mode=criterion_mode,
             criterion_alpha=criterion_alpha, area_geojson=area_geojson, user=user,

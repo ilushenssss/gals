@@ -29,6 +29,11 @@ class TaskSummary(BaseModel):
     name: str
     environment_id: str
     environment_name: str
+    # Парк БВС, выбранный для задачи: парков теперь несколько, и выбор — часть
+    # постановки. Совместимость с обстановкой по расстоянию проверена при
+    # создании (task_service._check_fleet_environment_compatibility).
+    fleet_id: str
+    fleet_name: str
     survey_type: SurveyType
     work_date: date
     status: TaskStatus
@@ -36,6 +41,7 @@ class TaskSummary(BaseModel):
     daylight_warning: str | None = None
     created_at: datetime
     updated_at: datetime
+    area: dict[str, Any]  # GeoJSON geometry, WGS-84
     # ЗАД.ФТ.12: сообщение о конфликте обязано назвать того, кто изменил
     # задачу первым. Аутентификации нет — это имя из заголовка X-User-Name.
     updated_by: str | None = None
@@ -49,4 +55,3 @@ class TaskDetail(TaskSummary):
     cloud_cover_pct: float | None
     criterion_mode: CriterionMode
     criterion_alpha: float
-    area: dict[str, Any]  # GeoJSON geometry, WGS-84

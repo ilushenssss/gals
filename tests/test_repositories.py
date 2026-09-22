@@ -77,6 +77,8 @@ def _task(task_id=TASK_ID, version=1, status="Черновик"):
         name="Задача",
         environment_id=ENV_ID,
         environment_name="Сцена",
+        fleet_id=FLEET_ID,
+        fleet_name="Парк Северный",
         survey_type="RGB",
         work_date=date(2026, 6, 15),
         status=status,
@@ -248,6 +250,7 @@ def test_environment_list_is_newest_first(db):
 
 def test_task_update_replaces_row_and_keeps_environment_name(db):
     repositories.environments.put(ENV_ID, _environment())
+    repositories.fleet.add(_fleet())
     repositories.tasks.put(TASK_ID, _task())
 
     updated = _task(version=2, status="Рассчитана")
@@ -292,6 +295,7 @@ def test_malformed_id_is_not_found_rather_than_error(db):
 
 def test_plan_versions_increment_per_task(db):
     repositories.environments.put(ENV_ID, _environment())
+    repositories.fleet.add(_fleet())
     repositories.tasks.put(TASK_ID, _task())
 
     assert repositories.plans.next_version(TASK_ID) == 1
@@ -306,6 +310,7 @@ def test_plan_versions_increment_per_task(db):
 
 def test_plan_route_geometry_survives_storage(db):
     repositories.environments.put(ENV_ID, _environment())
+    repositories.fleet.add(_fleet())
     repositories.tasks.put(TASK_ID, _task())
     original = _plan()
     repositories.plans.add(original)
@@ -341,6 +346,7 @@ def _report(plan_id=PLAN_ID, status="Есть нарушения", attempts=0):
 def test_report_after_recalc_is_found_by_both_plan_ids(db):
     """Автопересчет (БЕЗ.ФТ.3) меняет версию плана — отчет нужен по обеим."""
     repositories.environments.put(ENV_ID, _environment())
+    repositories.fleet.add(_fleet())
     repositories.tasks.put(TASK_ID, _task())
     repositories.plans.add(_plan(PLAN_ID, version=1))
     repositories.plans.add(_plan(PLAN_ID_2, version=2))
@@ -360,6 +366,7 @@ def test_report_after_recalc_is_found_by_both_plan_ids(db):
 def test_attempt_counter_is_keyed_by_task_version(db):
     """Правка задачи поднимает версию и тем самым сбрасывает счетчик (БЕЗ.ФТ.3)."""
     repositories.environments.put(ENV_ID, _environment())
+    repositories.fleet.add(_fleet())
     repositories.tasks.put(TASK_ID, _task())
 
     repositories.safety.set_attempts(TASK_ID, 1, 2)

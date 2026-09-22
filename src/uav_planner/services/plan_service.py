@@ -119,19 +119,7 @@ def _time_to_hours(t: time | None) -> float | None:
     return None if t is None else t.hour + t.minute / 60.0 + t.second / 3600.0
 
 
-def _eligible_from_latest_fleet() -> list:
-    """Переходная заглушка на время слияния ядра с обёрткой.
-
-    Парков стало несколько (шаг 2), но задача узнаёт свой парк только на шаге 3
-    — до тех пор берётся последний загруженный, что воспроизводит прежнее
-    поведение единственного «текущего» парка. Удаляется вместе с появлением
-    ``task.fleet_id``.
-    """
-    fleets = fleet_service.list_fleets()
-    return fleet_service.eligible_instances(fleets[0].id) if fleets else []
-
-
-def _pick_model_group(survey_type: str, eligible: list | None = None) -> tuple[str, str, list]:
+def _pick_model_group(survey_type: str, eligible: list) -> tuple[str, str, list]:
     """ПЛН.ФТ.10-подготовка: выбор модели БВС и совместимой камеры — группа
     готовых экземпляров с подходящей нагрузкой, в которой больше всего экземпляров.
 
@@ -146,10 +134,8 @@ def _pick_model_group(survey_type: str, eligible: list | None = None) -> tuple[s
             "(LiDAR и геофизическая съемка — модельные профили, будущая версия)"
         )
 
-    if eligible is None:
-        eligible = _eligible_from_latest_fleet()
     if not eligible:
-        raise PlanInfeasibleError("нет загруженного парка БВС в статусе «Готов»")
+        raise PlanInfeasibleError("в парке нет ни одного экземпляра БВС в статусе «Готов»")
 
     groups: dict[tuple[str, str], list] = {}
     for inst in eligible:
@@ -206,7 +192,7 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
 
     progress.stage("model")
     model_key, camera_key, instances = _pick_model_group(
-        task.survey_type, _eligible_from_latest_fleet()
+        task.survey_type, fleet_service.eligible_instances(task.fleet_id)
     )
     model = FLEET_MODELS[model_key]
 
