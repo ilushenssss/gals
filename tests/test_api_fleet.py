@@ -9,22 +9,8 @@ import io
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
-from uav_planner.api.app import app
-from uav_planner.api import fleet_service
-
-
-@pytest.fixture(autouse=True)
-def _clear_fleet():
-    fleet_service._fleets.clear()
-    yield
-    fleet_service._fleets.clear()
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
+from uav_planner.services import fleet_service
 
 
 def _rec(inv, model="geoscan-201", status="Готов", lat=56.7625, lon=60.5992, **extra):

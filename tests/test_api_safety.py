@@ -3,45 +3,6 @@
 import io
 import json
 
-import pytest
-from fastapi.testclient import TestClient
-
-from uav_planner.api.app import app
-from uav_planner.api import (
-    fleet_service,
-    plan_service,
-    safety_service,
-    service as environment_service,
-    task_service,
-)
-
-
-@pytest.fixture(autouse=True)
-def _clear_stores():
-    environment_service._store.clear()
-    task_service._tasks.clear()
-    fleet_service._fleets.clear()
-    plan_service._plans.clear()
-    plan_service._plan_ids_by_task.clear()
-    safety_service._reports_by_plan.clear()
-    safety_service._reports_by_id.clear()
-    safety_service._attempts_by_task_version.clear()
-    yield
-    environment_service._store.clear()
-    task_service._tasks.clear()
-    fleet_service._fleets.clear()
-    plan_service._plans.clear()
-    plan_service._plan_ids_by_task.clear()
-    safety_service._reports_by_plan.clear()
-    safety_service._reports_by_id.clear()
-    safety_service._attempts_by_task_version.clear()
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
-
-
 def square_coords(x0, y0, w, h):
     return [[[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h], [x0, y0]]]
 
@@ -61,10 +22,11 @@ def _upload_environment(client, with_launch_site=True, no_fly=False):
             "geometry": {"type": "Point", "coordinates": [37.56, 55.705]},
         })
     if no_fly:
-        # "Стена" БПЗ поперек всего пути от ВПП-1 (37.56, 55.705) до области
-        # облета (_create_task ниже) — растянута по широте намного дальше,
-        # чем может искать A* (visibility.find_path), поэтому обхода
-        # заведомо не существует и нарушение остается неустранимым.
+        # Небольшая БПЗ прямо посередине области облета, задаваемой в _create_task ниже.
+        # «Стена» БПЗ поперёк всего пути от ВПП-1 до области облёта: растянута
+        # по широте намного дальше, чем ищет локальный A* (visibility.find_path),
+        # поэтому обхода заведомо нет и нарушение остаётся неустранимым.
+        # Маленькую зону расчёт теперь обходит сам — на ней нарушения не будет.
         features.append({
             "type": "Feature",
             "properties": {"layer": "no_fly", "safety_buffer_m": 0},
@@ -81,36 +43,38 @@ def _upload_environment(client, with_launch_site=True, no_fly=False):
     return resp.json()["id"]
 
 
-def _upload_fleet(client, n=1, model="geoscan-gemini", status="Готов", location_lat=55.705, location_lon=37.56):
-    # Реальные (летающие) экземпляры намеренно БЕЗ собственной location_lat/lon
-    # — большинство тестов этого файла проверяют переход от ближайшей ВПП
-    # обстановки (в т.ч. обход/недостижимость через "стену" БПЗ), а не от
-    # локации экземпляра; так поведение не меняется по сравнению с тем, что
-    # тесты проверяли раньше. Локация парка (по запросу пользователя теперь
-    # определяется из файла, не вводится вручную) берётся с отдельного
-    # "якорного" экземпляра, который не летает (статус не "Готов") и на
-    # маршрутизацию не влияет.
+def _upload_fleet(client, n=1, model="geoscan-gemini", status="Готов", name="Парк"):
     records = [
-        {"inventory_number": f"{model}-{i}", "model": model, "status": status}
+        {"inventory_number": f"{model}-{i}", "model": model, "status": status,
+         "location_lat": 55.705, "location_lon": 37.56}
         for i in range(n)
-    ] + [
-        {"inventory_number": "anchor", "model": model, "status": "На обслуживании",
-         "location_lat": location_lat, "location_lon": location_lon},
     ]
     data = json.dumps(records).encode("utf-8")
     resp = client.post(
-        "/api/fleets", data={"name": "Парк"},
+        "/api/fleets", data={"name": name},
         files={"file": ("fleet.json", io.BytesIO(data), "application/json")},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 200
     return resp.json()["id"]
 
 
-def _create_task(client, env_id, fleet_id, **overrides):
+def _default_fleet_id(client):
+    """Парк по умолчанию — единственный загруженный тестом.
+
+    Задача обязана называть парк, но большинству тестов этих модулей всё равно
+    какой: они проверяют расчёт, а не выбор парка. Кому важно — передаёт
+    fleet_id явно.
+    """
+    fleets = client.get("/api/fleets").json()
+    assert fleets, "перед созданием задачи нужно загрузить парк (_upload_fleet)"
+    return fleets[0]["id"]
+
+
+def _create_task(client, env_id, fleet_id=None, **overrides):
     form = {
         "name": "Задача 1",
         "environment_id": env_id,
-        "fleet_id": fleet_id,
+        "fleet_id": fleet_id or _default_fleet_id(client),
         "survey_type": "RGB",
         "gsd_cm": "3.0",
         "work_date": "2026-06-15",
@@ -129,8 +93,8 @@ def _create_task(client, env_id, fleet_id, **overrides):
 
 def _make_plan(client, with_launch_site=True, no_fly=False, n_fleet=2):
     env_id = _upload_environment(client, with_launch_site=with_launch_site, no_fly=no_fly)
-    fleet_id = _upload_fleet(client, n=n_fleet)
-    task_id = _create_task(client, env_id, fleet_id)
+    _upload_fleet(client, n=n_fleet)
+    task_id = _create_task(client, env_id)
     plan = client.post("/api/plans", data={"task_id": task_id}).json()
     return plan["id"]
 
@@ -160,6 +124,82 @@ def test_safety_check_detects_unavoidable_no_fly_zone_violation(client):
     assert geozones["passed"] is False
     assert geozones["violations"]
     assert body["status"] == "Есть нарушения"
+
+
+def test_safety_check_exhausts_auto_recalc_limit_on_persistent_violation(client):
+    # Нарушение геозоны определяется обстановкой и задачей, не версией плана
+    # -> детерминированный пересчет воспроизводит его снова, и все три
+    # автоматические попытки (БЕЗ.ФТ.3) расходуются в одном вызове.
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    assert report["auto_recalc_count"] == 3
+    assert report["status"] == "Есть нарушения"
+    # Отчет привязан к последней (пересчитанной) версии плана, не к исходной.
+    versions = client.get("/api/plans", params={"task_id": report["task_id"]}).json()
+    assert len(versions) == 4  # исходный план + 3 пересчета
+    assert report["plan_id"] == versions[0]["id"]  # первый в списке — самый новый
+
+
+def test_recheck_does_not_trigger_recalculation(client):
+    plan_id = _make_plan(client, no_fly=True)
+    first = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    assert first["auto_recalc_count"] == 3
+
+    plans_before = client.get("/api/plans", params={"task_id": first["task_id"]}).json()
+    rechecked = client.post("/api/safety-checks/recheck", data={"plan_id": first["plan_id"]}).json()
+    plans_after = client.get("/api/plans", params={"task_id": first["task_id"]}).json()
+
+    assert len(plans_after) == len(plans_before)  # пересчета не было
+    assert rechecked["plan_id"] == first["plan_id"]
+    assert rechecked["auto_recalc_count"] == 3
+    assert rechecked["status"] == "Есть нарушения"
+
+
+def test_get_latest_safety_check(client):
+    plan_id = _make_plan(client)
+    created = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    fetched = client.get("/api/safety-checks/latest", params={"plan_id": plan_id}).json()
+    assert fetched["id"] == created["id"]
+
+
+def test_get_latest_safety_check_without_prior_run_returns_404(client):
+    plan_id = _make_plan(client)
+    resp = client.get("/api/safety-checks/latest", params={"plan_id": plan_id})
+    assert resp.status_code == 404
+
+
+def test_safety_check_for_unknown_plan_returns_404(client):
+    resp = client.post("/api/safety-checks", data={"plan_id": "does-not-exist"})
+    assert resp.status_code == 404
+
+
+def test_safety_check_reachability_fails_without_landing_site(client):
+    plan_id = _make_plan(client, with_launch_site=False)
+    resp = client.post("/api/safety-checks", data={"plan_id": plan_id})
+    body = resp.json()
+    reachability = next(c for c in body["checks"] if c["name"] == "reachability")
+    assert reachability["passed"] is False
+
+
+def test_violation_names_the_uav_and_sortie(client):
+    """БЕЗ.ФТ.4: при нарушении показывается идентификатор БВС и вылета.
+
+    Чистые проверки идентификаторов не знают — их приписывает оркестратор,
+    единственный, кто видит, чей это вылет. Это же делает нарушение
+    адресуемым на карте (ИНТ.ФТ.14).
+    """
+    plan_id = _make_plan(client, no_fly=True, n_fleet=1)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+
+    geozones = next(c for c in report["checks"] if c["name"] == "geozones")
+    assert geozones["passed"] is False
+    plan = client.get(f"/api/plans/{report['plan_id']}").json()
+    uav_id = plan["sorties"][0]["uav_id"]
+    assert all(
+        v["message"].startswith(f"{uav_id} · вылет ")
+        for v in geozones["violations"]
+        if not v["message"].startswith("...")
+    ), geozones["violations"]
 
 
 def test_violations_carry_wgs84_coordinates_for_map_markers(client):
@@ -220,67 +260,12 @@ def test_astar_avoids_small_no_fly_zone_so_safety_check_passes(client):
     assert report["status"] == "Пройдена"
 
 
-def test_safety_check_exhausts_auto_recalc_limit_on_persistent_violation(client):
-    # Нарушение геозоны определяется обстановкой и задачей, не версией плана
-    # -> детерминированный пересчет воспроизводит его снова, и все три
-    # автоматические попытки (БЕЗ.ФТ.3) расходуются в одном вызове.
-    plan_id = _make_plan(client, no_fly=True)
-    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
-    assert report["auto_recalc_count"] == 3
-    assert report["status"] == "Есть нарушения"
-    # Отчет привязан к последней (пересчитанной) версии плана, не к исходной.
-    versions = client.get("/api/plans", params={"task_id": report["task_id"]}).json()
-    assert len(versions) == 4  # исходный план + 3 пересчета
-    assert report["plan_id"] == versions[0]["id"]  # первый в списке — самый новый
-
-
-def test_recheck_does_not_trigger_recalculation(client):
-    plan_id = _make_plan(client, no_fly=True)
-    first = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
-    assert first["auto_recalc_count"] == 3
-
-    plans_before = client.get("/api/plans", params={"task_id": first["task_id"]}).json()
-    rechecked = client.post("/api/safety-checks/recheck", data={"plan_id": first["plan_id"]}).json()
-    plans_after = client.get("/api/plans", params={"task_id": first["task_id"]}).json()
-
-    assert len(plans_after) == len(plans_before)  # пересчета не было
-    assert rechecked["plan_id"] == first["plan_id"]
-    assert rechecked["auto_recalc_count"] == 3
-    assert rechecked["status"] == "Есть нарушения"
-
-
-def test_get_latest_safety_check(client):
-    plan_id = _make_plan(client)
-    created = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
-    fetched = client.get("/api/safety-checks/latest", params={"plan_id": plan_id}).json()
-    assert fetched["id"] == created["id"]
-
-
-def test_get_latest_safety_check_without_prior_run_returns_404(client):
-    plan_id = _make_plan(client)
-    resp = client.get("/api/safety-checks/latest", params={"plan_id": plan_id})
-    assert resp.status_code == 404
-
-
-def test_safety_check_for_unknown_plan_returns_404(client):
-    resp = client.post("/api/safety-checks", data={"plan_id": "does-not-exist"})
-    assert resp.status_code == 404
-
-
-def test_safety_check_reachability_fails_without_landing_site(client):
-    plan_id = _make_plan(client, with_launch_site=False)
-    resp = client.post("/api/safety-checks", data={"plan_id": plan_id})
-    body = resp.json()
-    reachability = next(c for c in body["checks"] if c["name"] == "reachability")
-    assert reachability["passed"] is False
-
-
 def _first_violation(report):
     for c in report["checks"]:
         for v in c["violations"]:
             if not v["message"].startswith("..."):
                 return v
-    raise AssertionError("report has no violations")
+    raise AssertionError("в отчёте нет нарушений")
 
 
 def test_violations_each_get_a_stable_id(client):

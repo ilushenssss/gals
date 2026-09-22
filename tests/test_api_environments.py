@@ -3,25 +3,6 @@
 import io
 import json
 
-import pytest
-from fastapi.testclient import TestClient
-
-from uav_planner.api.app import app
-from uav_planner.api import service
-
-
-@pytest.fixture(autouse=True)
-def _clear_store():
-    service._store.clear()
-    yield
-    service._store.clear()
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
-
-
 def _upload(client, geojson: dict, name: str = "Тестовая сцена"):
     data = json.dumps(geojson).encode("utf-8")
     return client.post(
@@ -213,6 +194,10 @@ def test_get_unknown_environment_returns_404(client):
 
 
 def test_frontend_index_is_served(client):
+    """По решению пользователя при переносе продуктового стека из
+    merge-core-into-wrapper обратно в main React-SPA не перенесена — этот же
+    процесс снова отдает vanilla-JS фронтенд первой версии интерфейса
+    (см. api/app.py), как было до переноса."""
     resp = client.get("/")
     assert resp.status_code == 200
     assert "Галс" in resp.text

@@ -1,10 +1,167 @@
+# Полный запуск сервиса «Галс»: docker compose up --build
+#
+# Состав: db (PostGIS), redis, одноразовый накат миграций, api (тот же
+# процесс отдает и API, и статический фронтенд первой версии интерфейса —
+# см. api/app.py), worker (фоновый расчет) и beat (периодические задачи).
+#
+# Отдельного SPA-контейнера здесь больше нет: при переносе продуктового
+# стека из ветки merge-core-into-wrapper обратно в main React-SPA (web/)
+# сознательно не перенесена — фронтенд остался тем же vanilla-JS файлом,
+# что раздавался и раньше на main, одним процессом с API. Интерфейс
+# открывается на API_PORT (8000), как было до переноса.
+
 services:
-  # Сейчас один процесс отдает и API, и статический фронтенд (см. api/app.py).
-  # Отдельные worker (фоновый расчет) и db (PostgreSQL) — по мере реализации
-  # модулей routing/plan (см. docs/code/uav_planner_kanban.html, карточка
-  # "docker compose: ui / api / worker / db").
+  db:
+    # На Apple Silicon образ postgis/postgis только amd64 и идет через эмуляцию.
+    # Для нативного arm64 положить в .env: POSTGIS_IMAGE=imresamu/postgis:16-3.4
+    image: ${POSTGIS_IMAGE:-postgis/postgis:16-3.4}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gals}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gals}
+      POSTGRES_DB: ${POSTGRES_DB:-gals}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -h 127.0.0.1 обязательно: во время initdb postgres слушает только
+      # unix-сокет, и проверка без TCP успевает сказать "healthy" до того,
+      # как сервер перезапустится и начнет принимать соединения по сети —
+      # тогда migrate стартует слишком рано и падает с connection refused.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", ""]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Отдельный одноразовый сервис, а не entrypoint приложения: при нескольких
+  # репликах api/worker entrypoint означал бы гонку за alembic-лок на старте.
+  # Здесь миграции накатываются ровно один раз, и если они падают — не
+  # стартует ничего, что видно сразу по коду выхода.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      GALS_ENV: ${GALS_ENV:-dev}
+      GALS_LOG_LEVEL: ${GALS_LOG_LEVEL:-INFO}
+      GALS_DATABASE_URL: ${GALS_DATABASE_URL:-postgresql+psycopg://gals:gals@db:5432/gals}
+      GALS_REDIS_URL: ${GALS_REDIS_URL:-redis://redis:6379/0}
+      GALS_PLAN_SYNC_WAIT_SECONDS: ${GALS_PLAN_SYNC_WAIT_SECONDS:-30}
+      GALS_PLAN_TIME_LIMIT_S: ${GALS_PLAN_TIME_LIMIT_S:-1800}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build: .
+    command:
+      ["uvicorn", "uav_planner.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
+    environment:
+      GALS_ENV: ${GALS_ENV:-dev}
+      GALS_LOG_LEVEL: ${GALS_LOG_LEVEL:-INFO}
+      GALS_DATABASE_URL: ${GALS_DATABASE_URL:-postgresql+psycopg://gals:gals@db:5432/gals}
+      GALS_REDIS_URL: ${GALS_REDIS_URL:-redis://redis:6379/0}
+      GALS_PLAN_SYNC_WAIT_SECONDS: ${GALS_PLAN_SYNC_WAIT_SECONDS:-30}
+      GALS_PLAN_TIME_LIMIT_S: ${GALS_PLAN_TIME_LIMIT_S:-1800}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
+
+  # Тот же образ, другая команда. Отдельный сервис, а не поток внутри api:
+  # получасовой расчет не должен делить процесс с HTTP, а масштабируется он
+  # независимо (docker compose up --scale worker=3).
+  worker:
+    build: .
+    command:
+      - celery
+      - -A
+      - uav_planner.jobs.celery_app:celery_app
+      - worker
+      # Одна длинная задача на процесс: prefetch=1, чтобы взятое сообщение не
+      # лежало в буфере воркера, пока он занят получасовым расчетом.
+      - --loglevel=INFO
+      - --concurrency=${WORKER_CONCURRENCY:-2}
+      - --prefetch-multiplier=1
+      - --queues=gals
+    environment:
+      GALS_ENV: ${GALS_ENV:-dev}
+      GALS_LOG_LEVEL: ${GALS_LOG_LEVEL:-INFO}
+      GALS_DATABASE_URL: ${GALS_DATABASE_URL:-postgresql+psycopg://gals:gals@db:5432/gals}
+      GALS_REDIS_URL: ${GALS_REDIS_URL:-redis://redis:6379/0}
+      GALS_PLAN_SYNC_WAIT_SECONDS: ${GALS_PLAN_SYNC_WAIT_SECONDS:-30}
+      GALS_PLAN_HARD_TIME_LIMIT_S: ${GALS_PLAN_HARD_TIME_LIMIT_S:-1980}
+      GALS_PLAN_TIME_LIMIT_S: ${GALS_PLAN_TIME_LIMIT_S:-1800}
+      GALS_JOB_STALE_AFTER_SECONDS: ${GALS_JOB_STALE_AFTER_SECONDS:-120}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # inspect ping спрашивает сам воркер через брокер — проверка сразу и
+      # процесса, и связи с Redis.
+      test: ["CMD-SHELL", "celery -A uav_planner.jobs.celery_app:celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # Janitor: единственный процесс, ставящий периодические задачи. Отдельный
+  # сервис, а не поток внутри воркера, — иначе при --scale worker=3 расписание
+  # тикало бы втрое чаще. Реплика ровно одна и по той же причине.
+  beat:
+    build: .
+    command:
+      - celery
+      - -A
+      - uav_planner.jobs.celery_app:celery_app
+      - beat
+      - --loglevel=INFO
+      # Файл расписания — в /tmp: /app в образе принадлежит appuser, но писать
+      # состояние в каталог с кодом незачем, а пустой --pidfile снимает отказ
+      # старта после жесткой остановки контейнера (остался бы чужой pid-файл).
+      - --schedule=/tmp/celerybeat-schedule
+      - --pidfile=
+    environment:
+      GALS_ENV: ${GALS_ENV:-dev}
+      GALS_LOG_LEVEL: ${GALS_LOG_LEVEL:-INFO}
+      GALS_DATABASE_URL: ${GALS_DATABASE_URL:-postgresql+psycopg://gals:gals@db:5432/gals}
+      GALS_REDIS_URL: ${GALS_REDIS_URL:-redis://redis:6379/0}
+      GALS_JOB_STALE_AFTER_SECONDS: ${GALS_JOB_STALE_AFTER_SECONDS:-120}
+      GALS_JOB_SWEEP_INTERVAL_SECONDS: ${GALS_JOB_SWEEP_INTERVAL_SECONDS:-30}
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # Образ общий, и его HEALTHCHECK стучится в HTTP-порт api — в этом
+      # контейнере такого порта нет, и проверка вечно показывала бы unhealthy.
+      disable: true
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

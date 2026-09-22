@@ -1,0 +1,46 @@
+# Dev-надстройка, подхватывается автоматически (docker compose up).
+# Код монтируется внутрь, uvicorn перезапускается на правку, порт БД
+# открыт наружу на нестандартном порту — чтобы можно было подключиться
+# psql и прогнать pytest с хоста, не конфликтуя с локальным PostgreSQL.
+# Если 8000 на машине уже занят — API_PORT=8001 docker compose up.
+
+services:
+  db:
+    ports:
+      - "${DB_PORT:-55432}:5432"
+
+  api:
+    command:
+      - uvicorn
+      - uav_planner.api.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/src
+    environment:
+      GALS_ENV: dev
+    volumes:
+      - ./src:/app/src
+      - ./migrations:/app/migrations
+
+  migrate:
+    volumes:
+      - ./migrations:/app/migrations
+      - ./src:/app/src
+
+  # Celery не умеет --reload; код монтируется, чтобы правка подхватывалась
+  # обычным docker compose restart worker, без пересборки образа.
+  worker:
+    environment:
+      GALS_ENV: dev
+    volumes:
+      - ./src:/app/src
+
+  beat:
+    environment:
+      GALS_ENV: dev
+    volumes:
+      - ./src:/app/src

@@ -4,32 +4,7 @@ import io
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 from shapely.geometry import Polygon, shape
-
-from uav_planner.api.app import app
-from uav_planner.api import fleet_service, plan_service, service as environment_service, task_service
-
-
-@pytest.fixture(autouse=True)
-def _clear_stores():
-    environment_service._store.clear()
-    task_service._tasks.clear()
-    fleet_service._fleets.clear()
-    plan_service._plans.clear()
-    plan_service._plan_ids_by_task.clear()
-    yield
-    environment_service._store.clear()
-    task_service._tasks.clear()
-    fleet_service._fleets.clear()
-    plan_service._plans.clear()
-    plan_service._plan_ids_by_task.clear()
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
-
 
 def square_coords(x0, y0, w, h):
     return [[[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h], [x0, y0]]]
@@ -60,28 +35,38 @@ def _upload_environment(client, with_launch_site=True):
     return resp.json()["id"]
 
 
-def _upload_fleet(client, n=1, model="geoscan-gemini", status="Готов", location_lat=55.705, location_lon=37.6):
-    # Локация парка определяется из файла (по запросу пользователя), не
-    # вводится вручную — задаём её через location_lat/lon каждого экземпляра.
+def _upload_fleet(client, n=1, model="geoscan-gemini", status="Готов", name="Парк"):
     records = [
         {"inventory_number": f"{model}-{i}", "model": model, "status": status,
-         "location_lat": location_lat, "location_lon": location_lon}
+         "location_lat": 55.705, "location_lon": 37.56}
         for i in range(n)
     ]
     data = json.dumps(records).encode("utf-8")
     resp = client.post(
-        "/api/fleets", data={"name": "Парк"},
+        "/api/fleets", data={"name": name},
         files={"file": ("fleet.json", io.BytesIO(data), "application/json")},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 200
     return resp.json()["id"]
 
 
-def _create_task(client, env_id, fleet_id, **overrides):
+def _default_fleet_id(client):
+    """Парк по умолчанию — единственный загруженный тестом.
+
+    Задача обязана называть парк, но большинству тестов этих модулей всё равно
+    какой: они проверяют расчёт, а не выбор парка. Кому важно — передаёт
+    fleet_id явно.
+    """
+    fleets = client.get("/api/fleets").json()
+    assert fleets, "перед созданием задачи нужно загрузить парк (_upload_fleet)"
+    return fleets[0]["id"]
+
+
+def _create_task(client, env_id, fleet_id=None, **overrides):
     form = {
         "name": "Задача 1",
         "environment_id": env_id,
-        "fleet_id": fleet_id,
+        "fleet_id": fleet_id or _default_fleet_id(client),
         "survey_type": "RGB",
         "gsd_cm": "3.0",
         "work_date": "2026-06-15",
@@ -100,8 +85,8 @@ def _create_task(client, env_id, fleet_id, **overrides):
 
 def test_create_plan_happy_path(client):
     env_id = _upload_environment(client)
-    fleet_id = _upload_fleet(client, n=2)
-    task_id = _create_task(client, env_id, fleet_id)
+    _upload_fleet(client, n=2)
+    task_id = _create_task(client, env_id)
 
     resp = client.post("/api/plans", data={"task_id": task_id})
     assert resp.status_code == 200, resp.text
@@ -117,8 +102,8 @@ def test_create_plan_happy_path(client):
 
 def test_create_plan_marks_task_calculated(client):
     env_id = _upload_environment(client)
-    fleet_id = _upload_fleet(client)
-    task_id = _create_task(client, env_id, fleet_id)
+    _upload_fleet(client)
+    task_id = _create_task(client, env_id)
 
     client.post("/api/plans", data={"task_id": task_id})
     task = client.get(f"/api/tasks/{task_id}").json()
@@ -127,8 +112,8 @@ def test_create_plan_marks_task_calculated(client):
 
 def test_get_plan_returns_sorties_with_route_geometry(client):
     env_id = _upload_environment(client)
-    fleet_id = _upload_fleet(client, n=2)
-    task_id = _create_task(client, env_id, fleet_id)
+    _upload_fleet(client, n=2)
+    task_id = _create_task(client, env_id)
     summary = client.post("/api/plans", data={"task_id": task_id}).json()
 
     detail = client.get(f"/api/plans/{summary['id']}").json()
@@ -137,6 +122,84 @@ def test_get_plan_returns_sorties_with_route_geometry(client):
         assert sortie["track_geojson"]["type"] == "LineString"
         assert sortie["flight_time_s"] > 0
         assert sortie["end_utc"] > sortie["start_utc"]
+
+
+def test_second_calculation_creates_new_version(client):
+    env_id = _upload_environment(client)
+    _upload_fleet(client)
+    task_id = _create_task(client, env_id)
+
+    first = client.post("/api/plans", data={"task_id": task_id}).json()
+    second = client.post("/api/plans", data={"task_id": task_id}).json()
+    assert second["version"] == first["version"] + 1
+
+    versions = client.get("/api/plans", params={"task_id": task_id}).json()
+    assert [v["version"] for v in versions] == [2, 1]
+
+
+def test_plan_with_no_ready_instances_is_infeasible(client):
+    # Парк существует — задачу с ним создать можно, готовность экземпляров к
+    # совместимости по расстоянию отношения не имеет. Но ни один борт не
+    # «Готов», и расчёт невыполним именно по этой причине.
+    env_id = _upload_environment(client)
+    fleet_id = _upload_fleet(client, status="На обслуживании")
+    task_id = _create_task(client, env_id, fleet_id)
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 422
+    assert "Готов" in resp.json()["detail"]
+
+
+def test_plan_with_incompatible_survey_type_is_infeasible(client):
+    env_id = _upload_environment(client)
+    _upload_fleet(client, model="geoscan-801")  # тепловизор/RGB 12Мп, не мультиспектральный
+    task_id = _create_task(client, env_id, survey_type="мультиспектральная")
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 422
+    assert "нагрузк" in resp.json()["detail"]
+
+
+def test_plan_with_lidar_survey_type_is_infeasible(client):
+    env_id = _upload_environment(client)
+    _upload_fleet(client)
+    task_id = _create_task(client, env_id, survey_type="LiDAR")
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 422
+    assert "LiDAR" in resp.json()["detail"] or "не поддерживается" in resp.json()["detail"]
+
+
+def test_plan_without_launch_site_uses_area_centroid(client):
+    env_id = _upload_environment(client, with_launch_site=False)
+    _upload_fleet(client)
+    task_id = _create_task(client, env_id)
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 200
+    detail = client.get(f"/api/plans/{resp.json()['id']}").json()
+    assert detail["sorties"][0]["takeoff_site"] is None
+
+
+def test_create_plan_for_unknown_task_returns_404(client):
+    resp = client.post("/api/plans", data={"task_id": "does-not-exist"})
+    assert resp.status_code == 404
+
+
+def test_get_unknown_plan_returns_404(client):
+    resp = client.get("/api/plans/does-not-exist")
+    assert resp.status_code == 404
+
+
+def test_higher_wind_speed_increases_total_flight_time(client):
+    # Крейсерская скорость = максимум модели минус скорость ветра (см. известные
+    # ограничения) -> при том же покрытии больший ветер должен увеличивать J2.
+    env_id = _upload_environment(client)
+    _upload_fleet(client, n=2)
+
+    task_calm = _create_task(client, env_id, name="Без ветра", wind_speed_ms="0")
+    task_windy = _create_task(client, env_id, name="С ветром", wind_speed_ms="5")
+
+    plan_calm = client.post("/api/plans", data={"task_id": task_calm}).json()
+    plan_windy = client.post("/api/plans", data={"task_id": task_windy}).json()
+
+    assert plan_windy["j2_s"] > plan_calm["j2_s"]
 
 
 def test_sortie_phases_cover_the_whole_flight_with_no_gaps(client):
@@ -158,69 +221,6 @@ def test_sortie_phases_cover_the_whole_flight_with_no_gaps(client):
             assert prev["end_utc"] == nxt["start_utc"]
         total_phase_distance = sum(p["distance_m"] for p in phases)
         assert total_phase_distance == pytest.approx(sortie["distance_m"], rel=1e-6)
-
-
-def test_second_calculation_creates_new_version(client):
-    env_id = _upload_environment(client)
-    fleet_id = _upload_fleet(client)
-    task_id = _create_task(client, env_id, fleet_id)
-
-    first = client.post("/api/plans", data={"task_id": task_id}).json()
-    second = client.post("/api/plans", data={"task_id": task_id}).json()
-    assert second["version"] == first["version"] + 1
-
-    versions = client.get("/api/plans", params={"task_id": task_id}).json()
-    assert [v["version"] for v in versions] == [2, 1]
-
-
-def test_plan_with_no_ready_instances_is_infeasible(client):
-    # Парк существует (задачу с ним создать можно — совместимость по
-    # расстоянию не про готовность экземпляров), но ни один экземпляр не в
-    # статусе «Готов» -> расчет плана невыполним именно на этом основании.
-    env_id = _upload_environment(client)
-    fleet_id = _upload_fleet(client, status="На обслуживании")
-    task_id = _create_task(client, env_id, fleet_id)
-    resp = client.post("/api/plans", data={"task_id": task_id})
-    assert resp.status_code == 422
-    assert "Готов" in resp.json()["detail"]
-
-
-def test_plan_with_incompatible_survey_type_is_infeasible(client):
-    env_id = _upload_environment(client)
-    fleet_id = _upload_fleet(client, model="geoscan-801")  # тепловизор/RGB 12Мп, не мультиспектральный
-    task_id = _create_task(client, env_id, fleet_id, survey_type="мультиспектральная")
-    resp = client.post("/api/plans", data={"task_id": task_id})
-    assert resp.status_code == 422
-    assert "нагрузк" in resp.json()["detail"]
-
-
-def test_plan_with_lidar_survey_type_is_infeasible(client):
-    env_id = _upload_environment(client)
-    fleet_id = _upload_fleet(client)
-    task_id = _create_task(client, env_id, fleet_id, survey_type="LiDAR")
-    resp = client.post("/api/plans", data={"task_id": task_id})
-    assert resp.status_code == 422
-    assert "LiDAR" in resp.json()["detail"] or "не поддерживается" in resp.json()["detail"]
-
-
-def test_plan_without_launch_site_uses_area_centroid(client):
-    env_id = _upload_environment(client, with_launch_site=False)
-    fleet_id = _upload_fleet(client)
-    task_id = _create_task(client, env_id, fleet_id)
-    resp = client.post("/api/plans", data={"task_id": task_id})
-    assert resp.status_code == 200
-    detail = client.get(f"/api/plans/{resp.json()['id']}").json()
-    assert detail["sorties"][0]["takeoff_site"] is None
-
-
-def test_create_plan_for_unknown_task_returns_404(client):
-    resp = client.post("/api/plans", data={"task_id": "does-not-exist"})
-    assert resp.status_code == 404
-
-
-def test_get_unknown_plan_returns_404(client):
-    resp = client.get("/api/plans/does-not-exist")
-    assert resp.status_code == 404
 
 
 def test_transit_route_avoids_no_fly_zone_via_astar(client):
@@ -439,18 +439,3 @@ def test_work_splits_across_two_vehicles_at_opposite_ends_of_the_area(client):
     # Балансировка узкого места не гарантирует идеальное равенство, но не
     # должна оставлять один БВС почти без работы на фоне другого.
     assert min(totals.values()) > 0.3 * max(totals.values())
-
-
-def test_higher_wind_speed_increases_total_flight_time(client):
-    # Крейсерская скорость = максимум модели минус скорость ветра (см. известные
-    # ограничения) -> при том же покрытии больший ветер должен увеличивать J2.
-    env_id = _upload_environment(client)
-    fleet_id = _upload_fleet(client, n=2)
-
-    task_calm = _create_task(client, env_id, fleet_id, name="Без ветра", wind_speed_ms="0")
-    task_windy = _create_task(client, env_id, fleet_id, name="С ветром", wind_speed_ms="5")
-
-    plan_calm = client.post("/api/plans", data={"task_id": task_calm}).json()
-    plan_windy = client.post("/api/plans", data={"task_id": task_windy}).json()
-
-    assert plan_windy["j2_s"] > plan_calm["j2_s"]

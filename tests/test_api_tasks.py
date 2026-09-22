@@ -4,29 +4,6 @@ import io
 import json
 
 import pytest
-from fastapi.testclient import TestClient
-
-from uav_planner.api.app import app
-from uav_planner.api import fleet_service
-from uav_planner.api import service as environment_service
-from uav_planner.api import task_service
-
-
-@pytest.fixture(autouse=True)
-def _clear_stores():
-    environment_service._store.clear()
-    task_service._tasks.clear()
-    fleet_service._fleets.clear()
-    yield
-    environment_service._store.clear()
-    task_service._tasks.clear()
-    fleet_service._fleets.clear()
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
-
 
 def square_coords(x0, y0, size):
     return [[[x0, y0], [x0 + size, y0], [x0 + size, y0 + size], [x0, y0 + size], [x0, y0]]]
@@ -336,3 +313,142 @@ def test_create_task_accepts_fleet_within_the_same_region(client):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["fleet_id"] == fleet_id
+
+
+def _raw_area_file(payload):
+    return {
+        "area_file": (
+            "area.geojson",
+            io.BytesIO(json.dumps(payload).encode("utf-8")),
+            "application/json",
+        )
+    }
+
+
+def _polygon(coords):
+    return {"type": "Polygon", "coordinates": coords}
+
+
+def test_conflict_message_names_the_user_who_edited_first(client):
+    """ЗАД.ФТ.12: второй редактор видит, кто изменил задачу, и текущую версию.
+
+    Имя приходит заголовком `X-User-Name` и кодируется процентами: ФИО
+    кириллические, а значение HTTP-заголовка обязано быть ASCII (см.
+    api/deps.py).
+    """
+    from urllib.parse import quote
+
+    env_id = _upload_environment(client)
+    fleet_id = _upload_fleet(client)
+    created = client.post(
+        "/api/tasks", data=_base_form(env_id, fleet_id), files=_area_file(square_coords(37.2, 55.2, 0.2))
+    ).json()
+
+    form = _base_form(env_id, fleet_id, name="Правка Иванова")
+    form["expected_version"] = "1"
+    first = client.put(
+        f"/api/tasks/{created['id']}", data=form,
+        files=_area_file(square_coords(37.2, 55.2, 0.2)),
+        headers={"X-User-Name": quote("Иванов И. И.")},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["version"] == 2
+
+    # Второй редактор всё ещё держит в форме версию 1.
+    stale = _base_form(env_id, fleet_id, name="Правка Сидорова")
+    stale["expected_version"] = "1"
+    second = client.put(
+        f"/api/tasks/{created['id']}", data=stale,
+        files=_area_file(square_coords(37.2, 55.2, 0.2)),
+        headers={"X-User-Name": quote("Сидоров С. С.")},
+    )
+    assert second.status_code == 409
+    detail = second.json()["detail"]
+    assert "Иванов И. И." in detail
+    assert "версия 2" in detail
+
+    # Правка второго не применилась.
+    assert client.get(f"/api/tasks/{created['id']}").json()["name"] == "Правка Иванова"
+
+
+def test_create_task_accepts_a_feature_collection_with_one_polygon(client):
+    """QGIS и geojson.io сохраняют нарисованную область именно коллекцией."""
+    env_id = _upload_environment(client)
+    fleet_id = _upload_fleet(client)
+    area = _polygon(square_coords(37.2, 55.2, 0.2))
+    payload = {
+        "type": "FeatureCollection",
+        "features": [{"type": "Feature", "properties": {"name": "область"}, "geometry": area}],
+    }
+    resp = client.post("/api/tasks", data=_base_form(env_id, fleet_id), files=_raw_area_file(payload))
+    assert resp.status_code == 200, resp.text
+
+    # Обертка снята на входе: хранится и отдается голая геометрия — ее ждут
+    # расчет и проверка безопасности (обе зовут shape(task.area)).
+    stored = client.get(f"/api/tasks/{resp.json()['id']}").json()["area"]
+    assert stored["type"] == "Polygon"
+
+
+def test_create_task_accepts_a_bare_feature(client):
+    env_id = _upload_environment(client)
+    fleet_id = _upload_fleet(client)
+    payload = {
+        "type": "Feature",
+        "properties": {},
+        "geometry": _polygon(square_coords(37.2, 55.2, 0.2)),
+    }
+    resp = client.post("/api/tasks", data=_base_form(env_id, fleet_id), files=_raw_area_file(payload))
+    assert resp.status_code == 200, resp.text
+
+
+def test_feature_collection_with_several_objects_is_rejected_with_400(client):
+    """Область облета по ЗАД.ФТ.4 одна; молча взять из файла первый полигон
+    хуже, чем сказать об этом."""
+    env_id = _upload_environment(client)
+    fleet_id = _upload_fleet(client)
+    feature = {
+        "type": "Feature",
+        "properties": {},
+        "geometry": _polygon(square_coords(37.2, 55.2, 0.2)),
+    }
+    payload = {"type": "FeatureCollection", "features": [feature, feature]}
+    resp = client.post("/api/tasks", data=_base_form(env_id, fleet_id), files=_raw_area_file(payload))
+    assert resp.status_code == 400
+    assert resp.json()["detail"][0]["field"] == "area"
+
+
+def test_empty_feature_collection_is_rejected_with_400(client):
+    env_id = _upload_environment(client)
+    fleet_id = _upload_fleet(client)
+    payload = {"type": "FeatureCollection", "features": []}
+    resp = client.post("/api/tasks", data=_base_form(env_id, fleet_id), files=_raw_area_file(payload))
+    assert resp.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "GeometryCollection", "geometries": []},  # shapely: GeometryTypeError
+        {"type": "Polygon"},                               # shapely: KeyError
+        {"foo": "bar"},                                    # shapely: AttributeError
+        [1, 2, 3],                                         # вообще не объект
+        "просто строка",
+    ],
+    ids=["unknown-type", "no-coordinates", "no-type", "list", "string"],
+)
+def test_garbage_in_the_area_file_is_a_400_not_a_500(client, payload):
+    """Регрессия: shapely на каждом виде мусора падает своим исключением, и
+    GeometryTypeError раньше улетал из сервиса наружу как 500."""
+    env_id = _upload_environment(client)
+    fleet_id = _upload_fleet(client)
+    resp = client.post("/api/tasks", data=_base_form(env_id, fleet_id), files=_raw_area_file(payload))
+    assert resp.status_code == 400, resp.text
+
+
+def test_broken_json_in_the_area_file_is_a_400(client):
+    env_id = _upload_environment(client)
+    fleet_id = _upload_fleet(client)
+    files = {"area_file": ("area.geojson", io.BytesIO(b"{ not json"), "application/json")}
+    resp = client.post("/api/tasks", data=_base_form(env_id, fleet_id), files=files)
+    assert resp.status_code == 400
+    assert resp.json()["detail"][0]["field"] == "area"
