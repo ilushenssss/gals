@@ -10,6 +10,7 @@ from uav_planner.safety import (
     check_daylight,
     check_energy,
     check_geozones,
+    check_max_altitude,
     check_reachability,
     check_separation,
     discretize,
@@ -73,6 +74,24 @@ def test_allowed_space_fails_when_leaving_zone():
 
 
 # ---------- check_energy ----------
+
+def test_max_altitude_passes_at_or_below_limit():
+    assert check_max_altitude(150.0).passed
+    assert check_max_altitude(100.0).passed
+
+
+def test_max_altitude_fails_above_limit():
+    result = check_max_altitude(180.0)
+    assert not result.passed
+    assert "180" in result.violations[0].message
+    assert "150" in result.violations[0].message
+    assert result.violations[0].point is None  # высота не привязана к точке маршрута
+
+
+def test_max_altitude_respects_custom_limit():
+    assert not check_max_altitude(120.0, limit_m=100.0).passed
+    assert check_max_altitude(80.0, limit_m=100.0).passed
+
 
 def test_energy_passes_within_budget():
     result = check_energy(route_length_m=1000, cruise_speed_mps=10, budget_s=200)

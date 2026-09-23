@@ -24,6 +24,10 @@ DEFAULT_STEP_M = 20.0
 DEFAULT_COVERAGE_TOLERANCE = 0.01
 DEFAULT_MIN_SEPARATION_M = 50.0
 DEFAULT_SEPARATION_TIME_STEP_S = 30.0
+# Потолок высоты полета без специального разрешения (практический предел
+# эксплуатации БВС в неклассифицированном пространстве, а не паспортный
+# потолок конкретной модели).
+DEFAULT_MAX_ALTITUDE_M = 150.0
 _VIOLATION_LIMIT = 5
 
 
@@ -141,6 +145,23 @@ def check_energy(
             ),
         ))
     return CheckResult("energy", True)
+
+
+def check_max_altitude(height_m: float, limit_m: float = DEFAULT_MAX_ALTITUDE_M) -> CheckResult:
+    """Высота съемки не выше жесткого потолка (по умолчанию 150 м).
+
+    v1-ограничение (честно, не молча): план сейчас летит на одной постоянной
+    высоте ``H`` весь вылет — переходы и галсы, без следования рельефу (см.
+    docs/realization/"Multiple fixed-wing UAVs collaborative coverage
+    3D.pdf", раздел 3.4 — altitude descent algorithm с цифровой моделью
+    высот, которого у нас нет). Поэтому проверка сравнивает одно число, а не
+    идет по точкам маршрута, как ``check_geozones``/``check_reachability`` —
+    по точкам здесь пока нечего различать, высота везде одна и та же."""
+    if height_m > limit_m:
+        return CheckResult("altitude", False, (
+            Violation(f"высота полета ({height_m:.0f} м) выше допустимого потолка ({limit_m:.0f} м)"),
+        ))
+    return CheckResult("altitude", True)
 
 
 def check_reachability(

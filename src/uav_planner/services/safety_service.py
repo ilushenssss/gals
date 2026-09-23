@@ -42,6 +42,7 @@ from uav_planner.safety import (
     check_daylight,
     check_energy,
     check_geozones,
+    check_max_altitude,
     check_reachability,
     check_separation,
 )
@@ -57,6 +58,7 @@ log = logging.getLogger(__name__)
 _LABELS = {
     "geozones": "Геозоны",
     "airspace": "Разрешенное пространство",
+    "altitude": "Максимальная высота",
     "energy": "Энергия",
     "reachability": "Достижимость площадки",
     "coverage": "Покрытие",
@@ -234,10 +236,18 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         )
 
     separation_result = check_separation(sortie_tracks)
+    altitude_result = check_max_altitude(plan.height_m)
 
     return [
         _combine("geozones", geozone_results, projector),
         _combine("airspace", airspace_results, projector),
+        SafetyCheckOut(
+            name="altitude", label=_LABELS["altitude"], passed=altitude_result.passed,
+            violations=[
+                _violation_out(v, projector, f"altitude__{i}")
+                for i, v in enumerate(altitude_result.violations)
+            ],
+        ),
         _combine("energy", energy_results, projector),
         _combine("reachability", reachability_results, projector),
         SafetyCheckOut(

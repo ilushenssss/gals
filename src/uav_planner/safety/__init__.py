@@ -1,5 +1,6 @@
 from .checks import (
     DEFAULT_COVERAGE_TOLERANCE,
+    DEFAULT_MAX_ALTITUDE_M,
     DEFAULT_MIN_SEPARATION_M,
     DEFAULT_STEP_M,
     CheckResult,
@@ -10,6 +11,7 @@ from .checks import (
     check_daylight,
     check_energy,
     check_geozones,
+    check_max_altitude,
     check_reachability,
     check_separation,
     discretize,
@@ -22,6 +24,7 @@ __all__ = [
     "discretize",
     "check_geozones",
     "check_allowed_space",
+    "check_max_altitude",
     "check_energy",
     "check_reachability",
     "check_coverage",
@@ -30,4 +33,5 @@ __all__ = [
     "DEFAULT_STEP_M",
     "DEFAULT_COVERAGE_TOLERANCE",
     "DEFAULT_MIN_SEPARATION_M",
+    "DEFAULT_MAX_ALTITUDE_M",
 ]

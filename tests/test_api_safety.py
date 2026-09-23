@@ -91,10 +91,10 @@ def _create_task(client, env_id, fleet_id=None, **overrides):
     return resp.json()["id"]
 
 
-def _make_plan(client, with_launch_site=True, no_fly=False, n_fleet=2):
+def _make_plan(client, with_launch_site=True, no_fly=False, n_fleet=2, **task_overrides):
     env_id = _upload_environment(client, with_launch_site=with_launch_site, no_fly=no_fly)
     _upload_fleet(client, n=n_fleet)
-    task_id = _create_task(client, env_id)
+    task_id = _create_task(client, env_id, **task_overrides)
     plan = client.post("/api/plans", data={"task_id": task_id}).json()
     return plan["id"]
 
@@ -103,16 +103,39 @@ def test_safety_check_happy_path_passes(client):
     # n_fleet=1: несколько БВС на одном ВПП стартуют по расписанию без учета
     # разведения (ПЛН — известное v1-ограничение) и вполне могут оказаться в
     # одной точке в один момент — с одним БВС такого конфликта не возникает.
-    plan_id = _make_plan(client, n_fleet=1)
+    # gsd_cm=2.5 (не дефолтный 3.0): на камере pf1b дефолтный GSD дает высоту
+    # съемки 153.2 м — уже выше нового потолка 150 м (см. test_max_altitude_*
+    # в test_api_safety.py) сам по себе, что здесь не проверяется.
+    plan_id = _make_plan(client, n_fleet=1, gsd_cm="2.5")
     resp = client.post("/api/safety-checks", data={"plan_id": plan_id})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["plan_id"] == plan_id
     names = {c["name"] for c in body["checks"]}
-    assert names == {"geozones", "airspace", "energy", "reachability", "coverage", "daylight", "separation"}
+    assert names == {
+        "geozones", "airspace", "altitude", "energy", "reachability", "coverage", "daylight", "separation",
+    }
     assert body["status"] == "Пройдена"
     assert all(c["passed"] for c in body["checks"])
     assert body["auto_recalc_count"] == 0
+
+
+def test_safety_check_detects_altitude_ceiling_violation(client):
+    # Дефолтный gsd_cm=3.0 на камере pf1b (geoscan-gemini) дает высоту съемки
+    # 153.2 м — выше потолка 150 м; расчетное ядро детерминировано, поэтому
+    # ни один из трех автопересчетов это не исправит (высота не зависит от
+    # версии плана, только от GSD и камеры).
+    plan_id = _make_plan(client, n_fleet=1)
+    resp = client.post("/api/safety-checks", data={"plan_id": plan_id})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    altitude = next(c for c in body["checks"] if c["name"] == "altitude")
+    assert altitude["passed"] is False
+    assert altitude["violations"]
+    assert "153" in altitude["violations"][0]["message"]
+    assert "150" in altitude["violations"][0]["message"]
+    assert body["status"] == "Есть нарушения"
+    assert body["auto_recalc_count"] == 3
 
 
 def test_safety_check_detects_unavoidable_no_fly_zone_violation(client):
@@ -249,7 +272,9 @@ def test_astar_avoids_small_no_fly_zone_so_safety_check_passes(client):
     env_id = resp.json()["id"]
 
     fleet_id = _upload_fleet(client, n=1)
-    task_id = _create_task(client, env_id, fleet_id)
+    # gsd_cm=2.5 — см. комментарий в test_safety_check_happy_path_passes:
+    # дефолтный 3.0 на камере pf1b дает высоту 153.2 м, выше потолка 150 м.
+    task_id = _create_task(client, env_id, fleet_id, gsd_cm="2.5")
     plan = client.post("/api/plans", data={"task_id": task_id}).json()
     detail = client.get(f"/api/plans/{plan['id']}").json()
     assert detail["warnings"] == []
