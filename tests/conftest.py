@@ -105,7 +105,7 @@ def fake_terrain_provider(monkeypatch):
     from uav_planner.terrain import ConstantElevationProvider
 
     provider = ConstantElevationProvider(height_m=0.0)
-    monkeypatch.setattr("uav_planner.services.terrain_service.default_elevation_provider", lambda: provider)
+    monkeypatch.setattr("uav_planner.services.terrain_service.default_elevation_provider", lambda **_: provider)
     return provider
 
 

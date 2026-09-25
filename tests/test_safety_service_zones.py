@@ -20,7 +20,7 @@ def _feature(layer, geometry, **props):
     return {"type": "Feature", "properties": {"layer": layer, **props}, "geometry": geometry}
 
 
-def _checks(airspace, no_fly=()):
+def _checks(airspace, no_fly=(), work_date=START.date()):
     route = {"type": "LineString", "coordinates": [[37.575, 55.704], [37.59, 55.704], [37.575, 55.704]]}
     env = SimpleNamespace(layers={
         "airspace": list(airspace),
@@ -31,6 +31,7 @@ def _checks(airspace, no_fly=()):
     })
     task = SimpleNamespace(
         area=_square(37.58, 55.702, 0.005, 0.004), window_start=None, window_end=None, timezone=None,
+        work_date=work_date,
     )
     sortie = SimpleNamespace(
         uav_id="A", sortie_index=0, track_geojson=route,
@@ -70,3 +71,14 @@ def test_no_fly_zone_counts_only_while_active():
     assert not _checks(airspace, [_feature("no_fly", zone)])["geozones"].passed
     assert _checks(airspace, [_feature("no_fly", zone, active_windows=later)])["geozones"].passed
     assert not _checks(airspace, [_feature("no_fly", zone, active_windows=during)])["geozones"].passed
+
+
+def test_daylight_flags_plan_that_starts_after_the_work_date():
+    # Регрессия: окно 18:20–23:00 осенью пусто, расписание уводило вылеты на
+    # весну, и каждый вылет по отдельности попадал в световой день своих суток.
+    wide = [_feature("airspace", WIDE, h_min=0, h_max=300)]
+    assert _checks(wide)["daylight"].passed
+
+    late = _checks(wide, work_date=START.date() - timedelta(days=180))["daylight"]
+    assert not late.passed
+    assert "план начинается 15.06.2026" in late.violations[0].message

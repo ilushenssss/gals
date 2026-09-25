@@ -61,7 +61,7 @@ def task_tzinfo(task: TaskDetail) -> tzinfo | None:
     return ZoneInfo(task.timezone) if task.timezone else None
 
 
-def _daylight_warning(
+def daylight_warning(
     area_geom: BaseGeometry, work_date: date, window_start: time | None, window_end: time | None,
     tz_name: str | None,
 ) -> str | None:
@@ -158,6 +158,8 @@ def _validate(
     criterion_mode: str,
     criterion_alpha: float | None,
     area_geojson: dict[str, Any],
+    wind_speed_ms: float | None = None,
+    cloud_cover_pct: float | None = None,
 ) -> tuple[Any, Any, float | None, BaseGeometry | None]:
     """Проверки ЗАД.ФТ.2-5. Возвращает (обстановка, парк, alpha, area_geom) или бросает TaskValidationError."""
     issues: list[TaskValidationIssue] = []
@@ -186,6 +188,13 @@ def _validate(
         issues.append(TaskValidationIssue(field="survey_type", message=f"недопустимый тип съемки: {survey_type!r}"))
     if gsd_cm <= 0:
         issues.append(TaskValidationIssue(field="gsd_cm", message="целевое разрешение GSD должно быть положительным"))
+    # Ветер и облачность необязательны, но облачность 150 % или отрицательный
+    # ветер — ошибка ввода, а не условие полета (в vanilla их держали min/max
+    # у полей, API принимал любое число).
+    if wind_speed_ms is not None and wind_speed_ms < 0:
+        issues.append(TaskValidationIssue(field="wind_speed_ms", message="скорость ветра не может быть отрицательной"))
+    if cloud_cover_pct is not None and not (0 <= cloud_cover_pct <= 100):
+        issues.append(TaskValidationIssue(field="cloud_cover_pct", message="облачность задается в процентах от 0 до 100"))
 
     alpha: float | None
     if criterion_mode == "Компромисс":
@@ -267,8 +276,9 @@ def create_task(
         environment_id=environment_id, fleet_id=fleet_id, survey_type=survey_type, gsd_cm=gsd_cm,
         work_date=work_date, window_start=window_start, window_end=window_end, tz_name=tz_name,
         criterion_mode=criterion_mode, criterion_alpha=criterion_alpha, area_geojson=area_geojson,
+        wind_speed_ms=wind_speed_ms, cloud_cover_pct=cloud_cover_pct,
     )
-    warning = _daylight_warning(area_geom, work_date, window_start, window_end, tz_name)
+    warning = daylight_warning(area_geom, work_date, window_start, window_end, tz_name)
 
     task_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
@@ -323,8 +333,9 @@ def update_task(
         environment_id=existing.environment_id, fleet_id=existing.fleet_id, survey_type=survey_type,
         gsd_cm=gsd_cm, work_date=work_date, window_start=window_start, window_end=window_end, tz_name=tz_name,
         criterion_mode=criterion_mode, criterion_alpha=criterion_alpha, area_geojson=area_geojson,
+        wind_speed_ms=wind_speed_ms, cloud_cover_pct=cloud_cover_pct,
     )
-    warning = _daylight_warning(area_geom, work_date, window_start, window_end, tz_name)
+    warning = daylight_warning(area_geom, work_date, window_start, window_end, tz_name)
 
     updated = existing.model_copy(update={
         "name": name, "survey_type": survey_type, "work_date": work_date,

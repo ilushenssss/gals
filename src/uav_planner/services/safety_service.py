@@ -88,7 +88,9 @@ def _valid_features(env, layer: str) -> list[dict]:
     return [f for f in env.layers.get(layer, []) if f.get("properties", {}).get("_valid", True)]
 
 
-def _agl_by_point(sample_points_utm: list[Point], projector: Projector) -> list[tuple[Point, float]] | None:
+def _agl_by_point(
+    sample_points_utm: list[Point], projector: Projector, progress: ProgressReporter
+) -> list[tuple[Point, float]] | None:
     """Независимо перепроверяет высоту над рельефом в точках маршрута —
     свой запрос к провайдеру высот, не переиспользующий профиль, который
     уже посчитал ``plan_service`` при встраивании рельефа в маршрут (тот же
@@ -100,7 +102,9 @@ def _agl_by_point(sample_points_utm: list[Point], projector: Projector) -> list[
     проверку."""
     if not sample_points_utm:
         return None
-    provider = terrain_service.default_elevation_provider()
+    # Самая долгая часть проверки: на сцене в сотню вылетов — сотня запросов
+    # по лимиту 1/с, поэтому каждый запрос тикает фоновой работе.
+    provider = terrain_service.default_elevation_provider(on_request=progress.tick)
     if provider is None:
         return None
 
@@ -251,7 +255,10 @@ def _with_recommendations(
     return result
 
 
-def _run_checks(env, task, plan: PlanDetail, applied_extra_buffer_m: float = 0.0) -> list[SafetyCheckOut]:
+def _run_checks(
+    env, task, plan: PlanDetail, applied_extra_buffer_m: float = 0.0, progress: ProgressReporter | None = None
+) -> list[SafetyCheckOut]:
+    progress = progress or ProgressReporter(None)
     airspace_feats = _valid_features(env, "airspace")
     no_fly_feats = _valid_features(env, "no_fly")
     obstacle_feats = _valid_features(env, "obstacle")
@@ -313,6 +320,7 @@ def _run_checks(env, task, plan: PlanDetail, applied_extra_buffer_m: float = 0.0
     altitude_sample_points_utm: list[Point] = []
 
     for sortie in plan.sorties:
+        progress.tick()
         label = sortie_label(sortie)
         route_utm = projector.to_utm(shape(sortie.track_geojson))
         survey_utm = projector.to_utm(shape(sortie.survey_tracks_geojson))
@@ -371,6 +379,21 @@ def _run_checks(env, task, plan: PlanDetail, applied_extra_buffer_m: float = 0.0
             cruise_speed_mps=plan.cruise_speed_mps,
         ))
 
+    # Каждый вылет выше сверен со световым днем своих суток — этого мало:
+    # расписание, начатое не в дату работ (окно пусто на эту дату), проходило
+    # поштучную проверку целиком, хотя работы уехали на полгода вперед.
+    if plan.sorties:
+        first = min(plan.sorties, key=lambda s: s.start_utc)
+        first_day = first.start_utc.astimezone(tz).date() if tz is not None else first.start_utc.date()
+        if first_day != task.work_date:
+            daylight_results.append((sortie_label(first), CheckResult("daylight", False, (
+                Violation(
+                    f"план начинается {first_day:%d.%m.%Y}, а дата работ задачи — {task.work_date:%d.%m.%Y}: "
+                    "в окно работ этой даты вылеты не укладываются",
+                    Point(projector.to_utm(shape(first.track_geojson)).coords[0]),
+                ),
+            ))))
+
     try:
         working_area = compute_working_area(
             projector.to_utm(area_geom), allowed_zones, no_fly_zones, obstacles, plan.height_m
@@ -383,8 +406,9 @@ def _run_checks(env, task, plan: PlanDetail, applied_extra_buffer_m: float = 0.0
             "coverage", False, (Violation(f"не удалось пересчитать рабочую область: {exc}"),)
         )
 
+    progress.tick()
     separation_result = check_separation(sortie_tracks, min_separation_m=settings.separation_distance_m)
-    agl_by_point = _agl_by_point(altitude_sample_points_utm, projector)
+    agl_by_point = _agl_by_point(altitude_sample_points_utm, projector, progress)
     altitude_result = check_max_altitude(plan.height_m, agl_by_point=agl_by_point)
     max_agl_m = max([plan.height_m] + [agl for _, agl in (agl_by_point or [])])
 
@@ -488,7 +512,7 @@ def check_plan(plan_id: str, progress: ProgressReporter | None = None) -> Safety
 
     max_recalc = get_settings().max_auto_recalc
     progress.stage("safety_check")
-    checks = _run_checks(env, task, plan)
+    checks = _run_checks(env, task, plan, progress=progress)
     buffer_step_m = get_settings().recalc_no_fly_buffer_step_m
     extra_buffer_m = 0.0
     while _status_of(checks) == "Есть нарушения" and attempts < max_recalc:
@@ -509,9 +533,11 @@ def check_plan(plan_id: str, progress: ProgressReporter | None = None) -> Safety
             f"В процессе автоматического пересчета ({attempts} из {max_recalc})",
             int(40 + 50 * attempts / (max_recalc + 1)),
         )
-        new_summary = plan_service.create_plan(task.id, extra_no_fly_buffer_m=extra_buffer_m)
+        new_summary = plan_service.create_plan(
+            task.id, extra_no_fly_buffer_m=extra_buffer_m, progress=progress.quiet()
+        )
         plan = plan_service.get_plan(new_summary.id)
-        checks = _run_checks(env, task, plan, applied_extra_buffer_m=extra_buffer_m)
+        checks = _run_checks(env, task, plan, applied_extra_buffer_m=extra_buffer_m, progress=progress)
 
     progress.stage("safety_save")
     return _store_report(original_plan_id, plan, task, checks, attempts)
@@ -529,7 +555,7 @@ def recheck_plan(plan_id: str, progress: ProgressReporter | None = None) -> Safe
     progress = progress or ProgressReporter(None)
     plan, task, env = _load_context(plan_id)
     progress.stage("safety_check")
-    checks = _run_checks(env, task, plan)
+    checks = _run_checks(env, task, plan, progress=progress)
     attempts = repositories.safety.get_attempts(task.id, task.version)
     progress.stage("safety_save")
     return _store_report(plan_id, plan, task, checks, attempts)

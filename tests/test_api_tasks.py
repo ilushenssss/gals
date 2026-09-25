@@ -108,6 +108,19 @@ def test_create_task_rejects_non_positive_gsd(client):
     assert any(i["field"] == "gsd_cm" for i in resp.json()["detail"])
 
 
+@pytest.mark.parametrize("field,value", [("wind_speed_ms", "-1"), ("cloud_cover_pct", "150"), ("cloud_cover_pct", "-5")])
+def test_create_task_rejects_out_of_range_weather(client, field, value):
+    env_id = _upload_environment(client)
+    fleet_id = _upload_fleet(client)
+    resp = client.post(
+        "/api/tasks",
+        data=_base_form(env_id, fleet_id, **{field: value}),
+        files=_area_file(square_coords(37.2, 55.2, 0.2)),
+    )
+    assert resp.status_code == 400
+    assert [i["field"] for i in resp.json()["detail"]] == [field]
+
+
 def test_create_task_requires_alpha_for_compromise(client):
     env_id = _upload_environment(client)
     fleet_id = _upload_fleet(client)

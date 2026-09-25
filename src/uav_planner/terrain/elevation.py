@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Protocol
+from typing import Callable, Protocol
 
 import requests
 
@@ -50,11 +50,18 @@ class OpenTopoDataProvider:
 
     Кэш по координатам, округленным до ``_COORD_ROUND_NDIGITS`` знаков —
     живёт вместе с экземпляром провайдера (один расчёт плана), не глобально.
+
+    ``on_request`` зовется перед каждым запросом: при лимите 1 запрос/с сотня
+    пакетов — это минуты, и фоновая работа через него шлет heartbeat и
+    проверяет отмену (см. ``jobs.progress.ProgressReporter.tick``).
     """
 
-    def __init__(self, base_url: str, timeout_s: float = 10.0) -> None:
+    def __init__(
+        self, base_url: str, timeout_s: float = 10.0, on_request: Callable[[], None] | None = None
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
+        self._on_request = on_request
         self._cache: dict[tuple[float, float], float] = {}
         self._last_request_at: float | None = None
 
@@ -71,6 +78,8 @@ class OpenTopoDataProvider:
             raise ElevationLookupError(f"высота рельефа не получена для точки {exc.args[0]}") from exc
 
     def _fetch_batch(self, keys: list[tuple[float, float]]) -> None:
+        if self._on_request is not None:
+            self._on_request()
         if self._last_request_at is not None:
             elapsed = time.monotonic() - self._last_request_at
             if elapsed < _MIN_REQUEST_INTERVAL_S:

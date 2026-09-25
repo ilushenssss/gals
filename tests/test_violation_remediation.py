@@ -64,7 +64,8 @@ def _altitude_checks(route_z):
                          "geometry": {"type": "Point", "coordinates": [37.575, 55.704]}}],
     })
     task = SimpleNamespace(area={"type": "Polygon", "coordinates": square_coords(37.58, 55.702, 0.005, 0.004)},
-                           window_start=None, window_end=None, timezone=None, gsd_cm=2.7)
+                           window_start=None, window_end=None, timezone=None, gsd_cm=2.7,
+                           work_date=START.date())
     sortie = SimpleNamespace(uav_id="A", sortie_index=0, track_geojson=route,
                              survey_tracks_geojson={"type": "MultiLineString", "coordinates": [coords[:2]]},
                              start_utc=START, end_utc=START + timedelta(minutes=10))

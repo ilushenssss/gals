@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -40,6 +41,10 @@ STAGES: dict[str, tuple[str, int]] = {
     "safety_save": ("Сохранение отчета", 96),
 }
 
+# Чаще тикать незачем: сторож (``job_stale_after_seconds``) ждет минуты, а
+# отмене хватает реакции за пару секунд.
+TICK_INTERVAL_S = 2.0
+
 # Весь перебор кандидатов укладывается в этот диапазон; каждый кандидат
 # получает равную долю, внутри доли — свои стадии (см. CandidateProgress).
 CANDIDATES_SPAN = (10, 92)
@@ -60,6 +65,7 @@ class ProgressReporter:
     def __init__(self, job_id: str | None) -> None:
         self.job_id = uuid.UUID(job_id) if job_id else None
         self._last_percent = -1
+        self._last_write = 0.0
 
     @property
     def no_op(self) -> bool:
@@ -97,7 +103,31 @@ class ProgressReporter:
             return
         self._write()
 
+    def tick(self) -> None:
+        """Отметка жизни и проверка отмены изнутри долгого цикла.
+
+        Для мест, где процент не меняется минутами: запросы высот рельефа
+        (1 запрос/с), обход зон по вылетам, проверка по вылетам. Без этого
+        сторож снимал живую работу как «прерванную перезапуском», а отмена
+        доходила только жесткой остановкой. Пишет не чаще ``TICK_INTERVAL_S``,
+        поэтому звать можно на каждой итерации.
+        """
+        if self.no_op or time.monotonic() - self._last_write < TICK_INTERVAL_S:
+            return
+        self._write()
+
+    def quiet(self) -> "ProgressReporter":
+        """Репортер для вложенного расчета: тикает, но стадию не трогает.
+
+        Автопересчет внутри проверки зовет ``create_plan`` — его стадии
+        («Геоскан 801: Построение галсов») перетерли бы статус «В процессе
+        автоматического пересчета» (БЕЗ.ФТ.5), а без репортера пересчет шел
+        бы минутами без heartbeat и без отмены.
+        """
+        return _QuietReporter(self)
+
     def _write(self, **values) -> None:
+        self._last_write = time.monotonic()
         now = datetime.now(timezone.utc)
         with short_session_scope() as session:
             cancel_requested = session.execute(
@@ -108,6 +138,15 @@ class ProgressReporter:
             ).scalar_one_or_none()
         if cancel_requested:
             raise JobCancelled()
+
+
+class _QuietReporter(ProgressReporter):
+    def __init__(self, parent: ProgressReporter) -> None:
+        super().__init__(None)
+        self.job_id = parent.job_id
+
+    def publish(self, stage: str, percent: int) -> None:
+        self.tick()
 
 
 class CandidateProgress:
@@ -143,6 +182,9 @@ class CandidateProgress:
         fraction = min(max(fraction, 0.0), 1.0)
         percent = int(self._low + (self._high - self._low) * fraction)
         self._reporter.publish(f"{self._prefix}{label}", percent)
+
+    def tick(self) -> None:
+        self._reporter.tick()
 
     def span(self, label: str, done: int, total: int, bounds: tuple[float, float]) -> None:
         low_f, high_f = bounds

@@ -103,6 +103,12 @@ def _claim(job_id: str, celery_task_id: str | None) -> bool:
     return claimed is not None
 
 
+def _cancel_requested(job_id: str) -> bool:
+    with short_session_scope() as session:
+        row = session.get(PlanJob, uuid.UUID(job_id))
+        return bool(row and row.cancel_requested)
+
+
 def _finish(job_id: str, status: str, **values) -> None:
     _update_job(job_id, status=status, finished_at=datetime.now(timezone.utc), **values)
 
@@ -146,6 +152,13 @@ def _run_body(job_id: str, celery_task_id: str | None, body, fields: dict) -> No
         _outcome(job_id, STATUS_CANCELLED, started, progress=0, error_code=ERROR_CANCELLED,
                  error="расчет отменен оператором", stage=None)
     except _SOFT_LIMIT:
+        if _cancel_requested(job_id):
+            # Тот же сигнал шлет escalate_cancel, когда кооперативная отмена не
+            # успела за CANCEL_GRACE_SECONDS: оператор нажал «Отменить», и
+            # исход — отмена, а не лимит времени.
+            _outcome(job_id, STATUS_CANCELLED, started, progress=0, error_code=ERROR_CANCELLED,
+                     error="расчет отменен оператором", stage=None)
+            return
         # ПЛН.ФТ.3. Лучшее найденное решение сохранить пока нечего: текущий
         # конвейер эвристик не имеет промежуточного допустимого плана — он
         # появится вместе с решателем OR-Tools, который умеет отдавать

@@ -531,20 +531,26 @@ def create_plan(
     tz = task_service.task_tzinfo(task)
     tz_label = task.timezone or "UTC"
 
+    # На дату работ должны быть рабочие часы. Расписание умеет продолжать
+    # работы в следующие дни, но начинать их не в дату задачи нельзя: окно
+    # 18:20–23:00 осенью пусто, и раньше вылеты молча уезжали на весну
+    # (первый день с поздним закатом) — через полгода после даты работ.
+    effective_window = work_window_utc(lat, lon, task.work_date, task.window_start, task.window_end, tz)
+    if effective_window is None:
+        raise PlanInfeasibleError(
+            task_service.daylight_warning(area_geom, task.work_date, task.window_start, task.window_end, task.timezone)
+            or f"на дату работ {task.work_date:%d.%m.%Y} нет рабочих часов"
+        )
+
     # Разрешенная зона с интервалами действия годится для плана, только если
     # действует все окно работ даты задачи (консервативно: какой вылет когда
-    # взлетит, станет известно лишь после расписания). Если на дату рабочих
-    # часов нет вовсе, фильтровать не по чему — расписание само перенесет
-    # вылеты, а проверка безопасности сверит зоны с их фактическим временем.
-    effective_window = work_window_utc(lat, lon, task.work_date, task.window_start, task.window_end, tz)
-    planning_allowed_zones = allowed_zones
-    if effective_window is not None:
-        planning_allowed_zones = [z for z in allowed_zones if z.is_active_throughout(*effective_window)]
-        if allowed_zones and not planning_allowed_zones:
-            raise PlanInfeasibleError(
-                "ни одна зона разрешенного воздушного пространства не действует в течение всего окна работ "
-                f"{task.work_date.isoformat()} — измените дату/окно работ или интервалы действия зон"
-            )
+    # взлетит, станет известно лишь после расписания).
+    planning_allowed_zones = [z for z in allowed_zones if z.is_active_throughout(*effective_window)]
+    if allowed_zones and not planning_allowed_zones:
+        raise PlanInfeasibleError(
+            "ни одна зона разрешенного воздушного пространства не действует в течение всего окна работ "
+            f"{task.work_date.isoformat()} — измените дату/окно работ или интервалы действия зон"
+        )
 
     # Один провайдер на весь расчет (все кандидаты) — его кэш по координатам
     # тогда работает и между кандидатами, не только внутри одного. Профиль
@@ -552,7 +558,7 @@ def create_plan(
     # 3D) — если рельеф выключен/недоступен, честный фолбэк на постоянную
     # высоту (Z = целевая высота съемки, как было до этой функции), а не
     # смешение размерностей.
-    real_elevation_provider = terrain_service.default_elevation_provider()
+    real_elevation_provider = terrain_service.default_elevation_provider(on_request=progress.tick)
     settings = get_settings()
 
     def build_candidate(
@@ -689,6 +695,10 @@ def create_plan(
             pending = list(routing_result.sorties_by_vehicle.get(vehicle.id, []))
             final_sorties: list[Sortie] = []
             while pending:
+                # Один борт может нести сотню вылетов, а процент здесь меняется
+                # только между бортами: без тика стадия шла минутами без
+                # heartbeat и без реакции на «Отменить».
+                tick.tick()
                 sortie = pending.pop(0)
                 legs = _build_sortie_legs(sortie, vehicle.launch_point, launch_name, restricted_zones, allowed_union)
                 actual_s = sum(leg.length_m for leg in legs) / cruise_speed

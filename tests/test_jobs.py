@@ -206,6 +206,21 @@ def test_infeasible_task_fails_the_job_and_returns_422(client):
     assert job["result_plan_id"] is None
 
 
+def test_task_without_work_hours_on_its_date_is_infeasible(client):
+    """Окно 18:20–23:00 в конце сентября целиком после заката: расчет обязан
+    отказать, а не перенести вылеты на весну (первый день с поздним закатом)."""
+    env_id = _upload_environment(client)
+    _upload_fleet(client)
+    task_id = _create_task(
+        client, env_id, work_date="2026-09-26", window_start="18:20", window_end="23:00",
+        timezone="Europe/Moscow",
+    )
+
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 422
+    assert "не пересекается со световым днем" in resp.json()["detail"]
+
+
 def test_unknown_job_returns_404(client):
     assert client.get(f"/api/plan-jobs/{uuid.uuid4()}").status_code == 404
     assert client.get("/api/plan-jobs/не-uuid").status_code == 404
@@ -423,6 +438,39 @@ def test_progress_reporter_raises_on_cancel_request(client, db):
         ProgressReporter(job.id).stage("load")
 
 
+def test_tick_checks_cancel_and_is_throttled(client, db):
+    """tick зовут на каждой итерации долгих циклов — писать он обязан редко,
+    но первый же вызов сверяет отмену."""
+    from uav_planner.services import job_service
+
+    job = job_service.submit("plan", _ready_task(client))[0]
+    db.execute(update(PlanJob).where(PlanJob.id == uuid.UUID(job.id)).values(cancel_requested=True))
+
+    reporter = ProgressReporter(job.id)
+    with pytest.raises(JobCancelled):
+        reporter.tick()
+    reporter.tick()  # сразу после записи — без обращения к БД, значит без исключения
+
+
+def test_quiet_reporter_keeps_the_stage_but_still_cancels(client, db):
+    """Автопересчет внутри проверки тикает через quiet(): статус «В процессе
+    автоматического пересчета» не перетирается стадиями расчета плана."""
+    from uav_planner.services import job_service
+
+    job = job_service.submit("plan", _ready_task(client))[0]
+    reporter = ProgressReporter(job.id)
+    reporter.publish("В процессе автоматического пересчета (1 из 3)", 52)
+
+    reporter.quiet().stage("model")
+    info = client.get(f"/api/plan-jobs/{job.id}").json()
+    assert info["stage"] == "В процессе автоматического пересчета (1 из 3)"
+    assert info["progress"] == 52
+
+    db.execute(update(PlanJob).where(PlanJob.id == uuid.UUID(job.id)).values(cancel_requested=True))
+    with pytest.raises(JobCancelled):
+        reporter.quiet().stage("model")
+
+
 def test_progress_reporter_without_job_is_inert(client):
     """Синхронный путь зовет сервисы без работы — репортер обязан молчать."""
     reporter = ProgressReporter(None)
@@ -507,6 +555,39 @@ def test_soft_time_limit_stops_the_job_with_the_required_status(client, monkeypa
     assert job["status"] == "Остановлен по лимиту времени"
     assert job["error_code"] == "timeout"
     assert "лимит" in job["error"]
+
+
+def test_escalated_cancel_is_recorded_as_cancel_not_timeout(client, monkeypatch):
+    """escalate_cancel останавливает задачу тем же SIGUSR1, что и лимит
+    времени. Оператор нажал «Отменить» — исход обязан быть «Отменен»."""
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    from uav_planner.db.session import short_session_scope
+
+    class _CancelledThenKilled(SoftTimeLimitExceeded):
+        pass
+
+    def cancel_then_kill(*args, **kwargs):
+        with short_session_scope() as session:
+            session.execute(update(PlanJob).values(cancel_requested=True))
+        raise _CancelledThenKilled()
+
+    from uav_planner.jobs import tasks
+    from uav_planner.services import job_service, plan_service
+
+    task_id = _ready_task(client)
+    job = job_service.submit("plan", task_id, idempotency_key="эскалация")[0]
+    from uav_planner.db.session import current_session
+
+    current_session().execute(update(PlanJob).where(PlanJob.id == uuid.UUID(job.id)).values(
+        status="В очереди", finished_at=None, result_plan_id=None, cancel_requested=False
+    ))
+    monkeypatch.setattr(plan_service, "create_plan", cancel_then_kill)
+    tasks.run_plan_job(job.id)
+
+    info = client.get(f"/api/plan-jobs/{job.id}").json()
+    assert info["status"] == "Отменен"
+    assert info["error_code"] == "cancelled"
 
 
 def test_unexpected_failure_lands_in_the_job_row(client, monkeypatch):

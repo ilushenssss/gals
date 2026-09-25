@@ -52,7 +52,7 @@ class _BrokenElevation:
 
 def test_plan_degrades_to_flat_altitude_when_terrain_is_unavailable(client, monkeypatch):
     monkeypatch.setattr(
-        "uav_planner.services.terrain_service.default_elevation_provider", lambda: _BrokenElevation(),
+        "uav_planner.services.terrain_service.default_elevation_provider", lambda **_: _BrokenElevation(),
     )
     env_id = _upload_environment(client)
     _upload_fleet(client)

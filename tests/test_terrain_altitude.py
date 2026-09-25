@@ -114,6 +114,22 @@ def test_open_topo_data_provider_batches_and_caches(monkeypatch):
     assert len(calls) == 1
 
 
+def test_open_topo_data_provider_calls_hook_before_every_request(monkeypatch):
+    # Хук — heartbeat и отмена фоновой работы: сотня пакетов по 1 запросу/с
+    # иначе шла минутами без признаков жизни, и сторож снимал проверку.
+    def fake_get(url, params, timeout):
+        n = params["locations"].count("|") + 1
+        return _FakeResponse({"results": [{"elevation": 0.0}] * n})
+
+    monkeypatch.setattr("uav_planner.terrain.elevation.requests.get", fake_get)
+    monkeypatch.setattr("uav_planner.terrain.elevation.time.sleep", lambda s: None)
+    hooks = []
+    provider = OpenTopoDataProvider("https://example.invalid/v1/srtm90m", on_request=lambda: hooks.append(1))
+
+    provider.elevations([(37.0 + i * 0.001, 55.0) for i in range(250)])
+    assert len(hooks) == 3
+
+
 def test_open_topo_data_provider_raises_lookup_error_on_network_failure(monkeypatch):
     import requests
 
