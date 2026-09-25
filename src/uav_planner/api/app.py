@@ -4,12 +4,12 @@
 поднять его с другими настройками, а модульный ``app`` сохранен для
 ``uvicorn uav_planner.api.app:app`` и существующих тестов на ``TestClient``.
 
-По решению пользователя (перенос продуктового стека из ветки
-``merge-core-into-wrapper`` обратно в ``main``) React-SPA из ``web/`` не
-переносится — фронтенд остается тем же vanilla-JS файлом, что и раньше,
-``api/static/index.html``, и раздается этим же процессом, как до переноса.
-CORS поэтому по умолчанию не нужен (список ``cors_origins`` пуст и остается
-на случай, когда фронтенд когда-нибудь поднимут отдельно).
+Основной интерфейс — React-SPA из ``web/`` за nginx (сервис ``web`` в
+compose), который проксирует ``/api`` на этот процесс: origin один, поэтому
+CORS по умолчанию не нужен (список ``cors_origins`` пуст). Прежний vanilla-JS
+интерфейс ``api/static/index.html`` этот процесс пока тоже отдает — как эталон
+для сверки паритета при переносе в SPA; снимается после закрытия
+``web/PARITY.md``.
 """
 
 from __future__ import annotations
@@ -39,11 +39,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings)
 
-    app = FastAPI(title="Галс — планировщик БВС", version="0.1.0")
+    app = FastAPI(
+        title="Галс — планировщик БВС",
+        version="0.1.0",
+        description=(
+            "Планирование и распределение беспилотных авиационных работ: обстановка, парк БВС, "
+            "задача, расчет плана (фоновая работа), независимая проверка безопасности, "
+            "подтверждение и экспорт. Длительные запросы (`POST /api/plans`, "
+            "`POST /api/safety-checks`) отвечают `200` с результатом, если успели за `wait_s`, "
+            "иначе `202` с объектом работы (`GET /api/plan-jobs/{id}`)."
+        ),
+    )
     app.state.settings = settings
 
-    # Фронтенд и API ходят через один origin (nginx или dev-proxy Vite),
-    # поэтому список по умолчанию пуст и middleware не навешивается.
+    # Фронтенд отдает этот же процесс — один origin, поэтому список по
+    # умолчанию пуст и middleware не навешивается.
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,

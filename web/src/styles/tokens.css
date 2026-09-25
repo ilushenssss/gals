@@ -1,0 +1,109 @@
+/* Токены дизайн-системы «Галс» (макеты — артефакт «Галс — дизайн интерфейса»).
+ *
+ * Три слоя: примитивы (значения прежнего интерфейса, не подобраны заново) →
+ * семантика (что экраны и компоненты используют напрямую) → домен (карта и
+ * борта). Компоненты не ссылаются на примитивы — только на семантику, так
+ * тема меняется переопределением примитивов и пары доменных значений.
+ *
+ * Тема: системная по умолчанию, `data-theme` на <html> фиксирует выбор
+ * оператора (см. app/theme.tsx). Темный блок повторен дважды — под
+ * медиавыражением для системной темы и под атрибутом для ручной.
+ */
+
+@import "@fontsource/onest/400.css";
+@import "@fontsource/onest/500.css";
+@import "@fontsource/onest/600.css";
+@import "@fontsource/onest/700.css";
+@import "@fontsource/pt-mono/400.css";
+@import "leaflet/dist/leaflet.css";
+
+:root {
+  color-scheme: light;
+  /* примитивы */
+  --p-paper: #F2F5F4; --p-panel: #E6ECEB; --p-ink: #16232B; --p-muted: #56666E; --p-rule: #C6D1D2;
+  --p-card: #FFFFFF; --p-code: #E3EAE9; --p-teal: #1F6F8B; --p-amber: #B8700F; --p-green: #4E7F22;
+  --p-magenta: #B0266F;
+
+  /* семантика */
+  --bg: var(--p-paper); --surface: var(--p-card); --surface-2: var(--p-panel); --surface-3: var(--p-code);
+  --text: var(--p-ink); --text-muted: var(--p-muted); --border: var(--p-rule); --border-strong: #9FB0B2;
+  --accent: var(--p-teal); --accent-hover: #185A71; --accent-soft: rgba(31, 111, 139, .10); --on-accent: #FFFFFF;
+  --ok: var(--p-green); --ok-soft: rgba(78, 127, 34, .12);
+  /* --warn как текст на белом не проходит 4.5:1 — для текста есть --warn-ink */
+  --warn: var(--p-amber); --warn-ink: #8A5300; --warn-soft: rgba(184, 112, 15, .13);
+  --danger: var(--p-magenta); --danger-soft: rgba(176, 38, 111, .10);
+  --focus: #1F6F8B;
+  --shadow-1: 0 1px 2px rgba(22, 35, 43, .08), 0 2px 8px rgba(22, 35, 43, .06);
+  --shadow-2: 0 8px 28px rgba(22, 35, 43, .18);
+  --backdrop: rgba(10, 20, 25, .42);
+
+  /* домен: карта */
+  --map-bg: #EEF2F1; --map-grid: #DFE6E5;
+  --map-airspace: #3B6DB3; --map-nofly: #B0266F; --map-obstacle: #8A6D1F; --map-area: #E07000;
+  --map-invalid: #D32F2F; --map-violation: #D32F2F; --map-site: #16232B; --map-halo: #FFFFFF;
+  /* домен: борта. Без оранжевого (он у области облета) и без малинового (БПЗ):
+     в прежней палитре второй борт совпадал с областью, первый — с пространством. */
+  --uav-1: #00808A; --uav-2: #6D4AC0; --uav-3: #4B7F1E; --uav-4: #9A5B13; --uav-5: #2E4A8C; --uav-6: #7D7A10;
+
+  /* шкалы */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px;
+  --r-1: 4px; --r-2: 6px; --r-3: 8px; --r-4: 12px; --r-pill: 999px;
+  --fs-cap: 11px; --fs-sm: 12.5px; --fs-body: 14px; --fs-lg: 16px; --fs-h2: 18px; --fs-display: 22px;
+  --font: "Onest", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "PT Mono", ui-monospace, Menlo, Consolas, monospace;
+  --header-h: 48px; --side-w: 380px;
+  --z-map-chrome: 800; --z-overlay: 900; --z-modal: 1000; --z-toast: 2000;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --p-paper: #0E181D; --p-panel: #16242B; --p-ink: #E2EBED; --p-muted: #96A7AE; --p-rule: #2B3C44;
+    --p-card: #182731; --p-code: #15232A; --p-teal: #5BB6D1; --p-amber: #E6A64A; --p-green: #8DC25B;
+    --p-magenta: #E0609F;
+    --border-strong: #44585F; --accent-hover: #7CC8DE; --accent-soft: rgba(91, 182, 209, .14); --on-accent: #0E181D;
+    --ok-soft: rgba(141, 194, 91, .14); --warn-ink: #E6A64A; --warn-soft: rgba(230, 166, 74, .14);
+    --danger-soft: rgba(224, 96, 159, .16); --focus: #7CC8DE;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, .4), 0 2px 8px rgba(0, 0, 0, .3); --shadow-2: 0 10px 32px rgba(0, 0, 0, .55);
+    --backdrop: rgba(0, 0, 0, .55);
+    --map-bg: #0F1B20; --map-grid: #1A2A31;
+    --map-airspace: #7FA6E6; --map-nofly: #E0609F; --map-obstacle: #C9A64A; --map-area: #FF9A3C;
+    --map-invalid: #FF6B6B; --map-violation: #FF6B6B; --map-site: #E2EBED; --map-halo: #0E181D;
+    --uav-1: #3CC3CC; --uav-2: #A58CF0; --uav-3: #8DC25B; --uav-4: #D69A55; --uav-5: #7F9CEB; --uav-6: #C9C24A;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --p-paper: #0E181D; --p-panel: #16242B; --p-ink: #E2EBED; --p-muted: #96A7AE; --p-rule: #2B3C44;
+  --p-card: #182731; --p-code: #15232A; --p-teal: #5BB6D1; --p-amber: #E6A64A; --p-green: #8DC25B;
+  --p-magenta: #E0609F;
+  --border-strong: #44585F; --accent-hover: #7CC8DE; --accent-soft: rgba(91, 182, 209, .14); --on-accent: #0E181D;
+  --ok-soft: rgba(141, 194, 91, .14); --warn-ink: #E6A64A; --warn-soft: rgba(230, 166, 74, .14);
+  --danger-soft: rgba(224, 96, 159, .16); --focus: #7CC8DE;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4), 0 2px 8px rgba(0, 0, 0, .3); --shadow-2: 0 10px 32px rgba(0, 0, 0, .55);
+  --backdrop: rgba(0, 0, 0, .55);
+  --map-bg: #0F1B20; --map-grid: #1A2A31;
+  --map-airspace: #7FA6E6; --map-nofly: #E0609F; --map-obstacle: #C9A64A; --map-area: #FF9A3C;
+  --map-invalid: #FF6B6B; --map-violation: #FF6B6B; --map-site: #E2EBED; --map-halo: #0E181D;
+  --uav-1: #3CC3CC; --uav-2: #A58CF0; --uav-3: #8DC25B; --uav-4: #D69A55; --uav-5: #7F9CEB; --uav-6: #C9C24A;
+}
+
+/* база */
+*, *::before, *::after { box-sizing: border-box }
+html, body { margin: 0; height: 100% }
+body {
+  background: var(--bg); color: var(--text); font-family: var(--font); font-size: var(--fs-body);
+  line-height: 1.45; -webkit-font-smoothing: antialiased; min-width: 1280px;
+}
+#root { height: 100% }
+h1, h2, h3, h4, p { margin: 0 }
+button, input, select, textarea { font: inherit; color: inherit }
+a { color: var(--accent) }
+code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px }
+.muted { color: var(--text-muted) }
+.sm { font-size: var(--fs-sm) }
+.cap { font-size: var(--fs-cap); letter-spacing: .06em; text-transform: uppercase; font-weight: 600; color: var(--text-muted) }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important } }
