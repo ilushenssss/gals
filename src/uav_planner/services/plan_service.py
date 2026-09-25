@@ -56,7 +56,13 @@ from uav_planner.geometry import (
 from uav_planner.jobs.progress import CandidateProgress, ProgressReporter
 from uav_planner.logging_setup import log_context
 from uav_planner.routing import Sortie, Track, Vehicle, cluster_assign_and_route, split_into_sorties
-from uav_planner.schedule import DEFAULT_LAUNCH_INTERVAL_S, ScheduleError, assign_timestamps, work_window_utc
+from uav_planner.schedule import (
+    DEFAULT_LAUNCH_INTERVAL_S,
+    DEFAULT_OVERHEAD_S,
+    ScheduleError,
+    assign_timestamps,
+    work_window_utc,
+)
 from uav_planner.terrain import (
     ConstantElevationProvider,
     ElevationLookupError,
@@ -668,7 +674,9 @@ def create_plan(
         # Фактический маршрут в обход зон строится ниже, и налёт вылета
         # пересчитывается по нему ДО расписания: световой день обязан
         # укладывать настоящую длительность, а не приблизительную.
-        routing_result = cluster_assign_and_route(track_objs, vehicles)
+        # Та же замена АКБ между вылетами, что закладывает расписание, —
+        # иначе балансировка оценивала бы J1 не тем числом.
+        routing_result = cluster_assign_and_route(track_objs, vehicles, sortie_overhead_s=DEFAULT_OVERHEAD_S)
         n_sorties_raw = sum(len(sorties) for sorties in routing_result.sorties_by_vehicle.values())
         log.append(
             f"Галсы распределены между {len(vehicles)} БВС парка (модель «{model.name}», камера «{camera.name}»), "

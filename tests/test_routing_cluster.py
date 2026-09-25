@@ -156,37 +156,49 @@ def test_tsp_order_beats_arbitrary_order():
 
 # ---------- Шаг 4: балансировка узкого места ----------
 
-def test_bottleneck_balancing_reduces_imbalance_between_vehicles():
-    # Восемь галсов вытянуты в линию между площадками A (в начале) и B (в
-    # конце). Шаг 2 закрепляет их по чистой близости площадки (без поправки
-    # на нагрузку) — при равных по длине галсах это разбиение уже само по
-    # себе near-оптимально по балансу, поэтому здесь галсы у площадки A
-    # длиннее (180 м), чем у площадки B (60 м): близость к площадке (Шаг 2)
-    # не зависит от длины галса, а вот итоговая нагрузка — зависит, так что
-    # у A остаётся заметный избыток, который Шаг 4 должен уменьшить, передав
-    # площадке B её граничный (последний в туре A) галс.
-    long_len, short_len = 180.0, 60.0
+def test_bottleneck_balancing_reduces_the_makespan():
+    # Двадцать параллельных галсов, и все по близости достаются площадке A
+    # (Шаг 2 не смотрит на загрузку): B остается без работы. Шаг 4 обязан
+    # переложить на B половину — J1 (время самого загруженного борта)
+    # падает почти вдвое.
+    tracks = [Track(id=f"n{i}", geometry=LineString([(0, i * 40), (1000, i * 40)])) for i in range(20)]
+    vehicles = [
+        vehicle("A", 10.0, 10_000.0, launch_point=Point(0, -100)),
+        vehicle("B", 10.0, 10_000.0, launch_point=Point(1000, -600)),
+    ]
+
+    unbalanced = cluster_assign_and_route(tracks, vehicles, max_balance_iterations=0)
+    balanced = cluster_assign_and_route(tracks, vehicles)
+
+    def makespan(result):
+        return max(sum(s.flight_time_s for s in sorties) for sorties in result.sorties_by_vehicle.values())
+
+    assert makespan(balanced) < 0.6 * makespan(unbalanced)
+    # Балансировка не теряет и не дублирует галсы.
+    for result in (unbalanced, balanced):
+        ids = [t.id for sorties in result.sorties_by_vehicle.values() for s in sorties for t in s.tracks]
+        assert sorted(ids) == sorted(t.id for t in tracks)
+
+
+def test_balancing_never_trades_a_better_makespan_for_a_smaller_gap():
+    # Прежняя балансировка принимала перенос, если он сокращал разрыв между
+    # бортами: здесь 252/220 с → 236/260 с — разрыв меньше, но J1 хуже
+    # (252 → 260). Критерий «Время» — J1, поэтому такой перенос не делается.
     tracks = [
-        Track(id=f"n{i}", geometry=LineString([(i * 200, 0), (i * 200 + (long_len if i < 6 else short_len), 0)]))
+        Track(id=f"n{i}", geometry=LineString([(i * 200, 0), (i * 200 + (180.0 if i < 6 else 60.0), 0)]))
         for i in range(8)
     ]
     vehicles = [
         vehicle("A", 10.0, 10_000.0, launch_point=Point(0, 0)),
         vehicle("B", 10.0, 10_000.0, launch_point=Point(2500, 0)),
     ]
-
     unbalanced = cluster_assign_and_route(tracks, vehicles, max_balance_iterations=0)
     balanced = cluster_assign_and_route(tracks, vehicles, balance_epsilon_s=30.0)
 
-    def imbalance(result):
-        costs = [sum(s.flight_time_s for s in sorties) for sorties in result.sorties_by_vehicle.values()]
-        return max(costs) - min(costs)
+    def makespan(result):
+        return max(sum(s.flight_time_s for s in sorties) for sorties in result.sorties_by_vehicle.values())
 
-    assert imbalance(balanced) < imbalance(unbalanced)
-    # Балансировка не теряет и не дублирует галсы.
-    for result in (unbalanced, balanced):
-        all_ids = {t.id for sorties in result.sorties_by_vehicle.values() for s in sorties for t in s.tracks}
-        assert all_ids == {t.id for t in tracks}
+    assert makespan(balanced) <= makespan(unbalanced)
 
 
 def test_assignment_gives_each_vehicle_a_contiguous_spatial_strip():
@@ -218,3 +230,41 @@ def test_assignment_gives_each_vehicle_a_contiguous_spatial_strip():
     # снова, перемешавшись с чужими галсами («шахматка»).
     runs = 1 + sum(1 for a, b in zip(ordered_owners, ordered_owners[1:]) if a != b)
     assert runs <= len(vehicles)
+
+
+def _fixture_case(name):
+    import json
+    from pathlib import Path
+
+    data = json.loads((Path(__file__).parent / "fixtures" / name).read_text(encoding="utf-8"))
+    tracks = [Track(id=f"g{i}", geometry=LineString([(x0, y0), (x1, y1)])) for i, (x0, y0, x1, y1) in enumerate(data["tracks"])]
+    vehicles = [
+        vehicle(v["id"], v["speed_mps"], v["budget_s"], launch_point=Point(*v["launch"])) for v in data["vehicles"]
+    ]
+    return tracks, vehicles
+
+
+def test_balancing_does_not_leave_the_far_vehicle_idle():
+    """Регрессия 25.09.2026 на реальной сцене: все 41 галс ближе к северной
+    ВПП. Балансировка сделала один перенос, на втором эвристика тура дала +20 с,
+    и цикл остановился: 801-02 получил 40 галсов (два вылета и замена АКБ,
+    J1 ≈ 72 мин), 801-01 — один (8 мин). Кроме того, загрузка оценивалась
+    длиной тура, а не вылетами: 1927 с при бюджете 1920 — лишний вылет."""
+    overhead_s = 15 * 60.0  # замена АКБ, как в расписании
+
+    tracks, vehicles = _fixture_case("routing_moscow_two_sites.json")
+    result = cluster_assign_and_route(tracks, vehicles)
+
+    assert result.unassigned_tracks == []
+    counts = {vid: sum(len(s.tracks) for s in sorties) for vid, sorties in result.sorties_by_vehicle.items()}
+    assert sum(counts.values()) == 41
+    assert min(counts.values()) >= 10, counts
+
+    # J1 без расписания: налет вылетов борта плюс замена АКБ между ними.
+    def busy_s(sorties):
+        return sum(s.flight_time_s for s in sorties) + overhead_s * (len(sorties) - 1)
+
+    j1 = max(busy_s(s) for s in result.sorties_by_vehicle.values())
+    assert j1 <= 55 * 60, j1  # было ≈ 4300 с
+    # Весь объем в два вылета не помещается, но лишних быть не должно.
+    assert sum(len(s) for s in result.sorties_by_vehicle.values()) == 3

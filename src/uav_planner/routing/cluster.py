@@ -44,20 +44,19 @@
 оценивается здесь по прямой линии (см. v1-ограничение ниже) — это то же
 приближение, которым Split ограничивал бюджет вылета и раньше.
 
-**Шаг 4. Балансировка узкого места.** Разброс T_total между БВС (Т_max −
-T_min) — это и есть надбавка к критерию J1 (min-max), которую можно снизить,
-не меняя список галсов, а только их распределение. Пока разброс больше
-``balance_epsilon_s``, «граничный» галс (последний в туре самого нагруженного
-БВС — эвристически близкий к границе его области, не требующий точного
-геометрического поиска границы) переносится наименее нагруженному БВС,
-которому он вообще по силам соло, и оба тура перестраиваются — но только
-если это на самом деле уменьшает разброс: перенос одного галса иногда лишь
-меняет местами, какой из двух бортов «медленный» (симметричный случай —
-типично для равных по длине галсов в ряд, когда пограничный галс одинаково
-дорог что для приёма, что для отказа), тогда шаг не даёт выигрыша и
-балансировку дальше в эту сторону не продолжаем. Итерации ограничены
+**Шаг 4. Балансировка узкого места.** J1 (min-max) определяет самый
+загруженный борт, и его можно снизить, не меняя список галсов, а только их
+распределение. Загрузка борта оценивается с разбиением тура на вылеты и
+заменой АКБ между ними (``_vehicle_time_s``), а не длиной одного тура: тур
+чуть длиннее бюджета — это лишний вылет и 15 минут простоя. Пока разброс
+больше ``balance_epsilon_s``, «граничный» галс перегруженного борта (ближайший
+по перелёту к площадке недогруженного) переносится недогруженному, если тому
+он по силам соло, и оба тура перестраиваются. Одиночный перенос может и
+ухудшить оценку — тур строит эвристика, — поэтому поиск не обрывается на
+первой неудаче, а идет, пока ``DEFAULT_BALANCE_PATIENCE`` переносов подряд не
+улучшат J1, и возвращает лучшее найденное распределение. Итерации ограничены
 (``max_balance_iterations``) — сходимость для произвольной геометрии не
-гарантирована, но на практике несколько шагов заметно выравнивают загрузку.
+гарантирована.
 
 **Нюансы нашей задачи, из-за которых схема адаптирована, а не взята
 дословно:**
@@ -72,11 +71,11 @@ T_min) — это и есть надбавка к критерию J1 (min-max),
     точный налет каждого вылета перед расписанием. Разворотов Дубинса нет —
     это забота нереализованного модуля ``motion``;
   - итоговый критерий J1 — это makespan **расписания** (со световым днем и
-    многодневностью), а не просто сумма T_total по вылету; Шаг 4 балансирует
-    по T_total (сумме прямолинейных оценок на БВС) как по сильной
-    приближенной прокси J1, не пересчитывая расписание на каждой итерации —
-    пересчитывать полное расписание (со световым днем) внутри цикла
-    балансировки было бы дорого и в целом не нужно для выбора, ЧТО переносить.
+    многодневностью); Шаг 4 балансирует по ``_vehicle_time_s`` (налет
+    вылетов по прямой плюс замена АКБ) как по приближенной прокси J1, не
+    пересчитывая расписание на каждой итерации — полное расписание (со
+    световым днем) внутри цикла балансировки было бы дорого и для выбора,
+    ЧТО переносить, не нужно.
 
 См. docs/trebovania/Математическая_модель.md, разделы 10-11.
 """
@@ -94,6 +93,14 @@ DEFAULT_MAX_BALANCE_ITERATIONS = 100  # цикл всё равно выходи�
                                        # переносов галса (иначе при 6 итерациях реальная сцена в
                                        # десятки галсов на борт не успевает выровняться до эпсилон)
 DEFAULT_BALANCE_EPSILON_S = 90.0
+# Сколько переносов подряд без улучшения J1 балансировка терпит, прежде чем
+# сдаться: оценка тура — эвристика, и одиночный перенос может ее случайно
+# ухудшить на десятки секунд, хотя следующие дают выигрыш в разы больше.
+DEFAULT_BALANCE_PATIENCE = 10
+# Накладные расходы между вылетами одного борта (замена АКБ) — то же
+# допущение, что schedule.DEFAULT_OVERHEAD_S; число дублируется, потому что
+# schedule сам импортирует этот модуль.
+DEFAULT_SORTIE_OVERHEAD_S = 15 * 60.0
 _MAX_TWO_OPT_TRACKS = 80  # больше — тур строит только «ближайший сосед», без 2-opt (иначе O(n^3) дорого)
 
 
@@ -288,13 +295,20 @@ def _tsp_order(tracks: list[Track], start: Point) -> list[Track]:
 
 # ---------- Шаг 4: балансировка узкого места ----------
 
-def _cluster_total_cost_s(order: list[Track], vehicle: Vehicle) -> float:
-    """T_total = переход туда + галсы + переход обратно, по прямой (та же
-    оценка, что и в Split) — прокси для критерия J1 на Шаге 4."""
+def _vehicle_time_s(order: list[Track], vehicle: Vehicle, overhead_s: float) -> float:
+    """Время работы борта по туру ``order`` с учетом разбиения на вылеты:
+    налет всех вылетов плюс замена АКБ между ними — прокси J1 на Шаге 4.
+
+    Длина одного непрерывного тура (как было раньше) для этого не годится: тур чуть длиннее бюджета режется на два вылета и добавляет
+    ``overhead_s``, а по длине тура это не видно. Так балансировка оставляла
+    борту 1927 с при бюджете 1920 — и лишний вылет с 15 минутами простоя.
+    """
     if not order:
         return 0.0
-    cost, end = _tour_cost_and_end(order, vehicle.launch_point)
-    return (cost + end.distance(vehicle.launch_point)) / vehicle.speed_mps
+    sorties, leftover = split_into_sorties(order, vehicle)
+    if leftover:
+        return float("inf")
+    return sum(s.flight_time_s for s in sorties) + overhead_s * (len(sorties) - 1)
 
 
 def _balance_bottleneck(
@@ -302,55 +316,67 @@ def _balance_bottleneck(
     vehicles: list[Vehicle],
     max_iterations: int,
     epsilon_s: float,
+    overhead_s: float = DEFAULT_SORTIE_OVERHEAD_S,
+    patience: int = DEFAULT_BALANCE_PATIENCE,
 ) -> dict[str, list[Track]]:
+    """Переносит граничные галсы от самого загруженного борта к наименее
+    загруженному и возвращает лучшее найденное распределение по J1 (время
+    самого загруженного борта), а не последнее.
+
+    Раньше цикл обрывался на первом переносе, который не уменьшил разброс.
+    Оценка тура — эвристика (ближайший сосед), и удаление галса из середины
+    «змейки» иногда удлиняет оставшийся тур: на сцене в 41 галс второй
+    перенос дал +20 с, балансировка остановилась, и один борт получил 40
+    галсов (два вылета, J1 = 72 мин), а второй — один (8 мин). Теперь
+    неудачный перенос не обрывает поиск: цикл идет дальше, пока ``patience``
+    переносов подряд не улучшат J1.
+    """
     by_id = {v.id: v for v in vehicles}
-    costs = {vid: _cluster_total_cost_s(order, by_id[vid]) for vid, order in clusters.items()}
+    costs = {vid: _vehicle_time_s(order, by_id[vid], overhead_s) for vid, order in clusters.items()}
+    best_j1, best_clusters = max(costs.values(), default=0.0), dict(clusters)
+    stale = 0
 
     for _ in range(max_iterations):
         if len(costs) < 2:
             break
         slow_id = max(costs, key=costs.get)
         fast_id = min(costs, key=costs.get)
-        imbalance = costs[slow_id] - costs[fast_id]
-        if imbalance <= epsilon_s or not clusters[slow_id]:
+        if costs[slow_id] - costs[fast_id] <= epsilon_s or not clusters[slow_id]:
             break
 
         slow_vehicle, fast_vehicle = by_id[slow_id], by_id[fast_id]
         # «Граничный» галс — тот из кластера перегруженного борта, что ближе
         # всего по перелёту к площадке недогруженного: именно он лежит на
         # границе двух территорий. «Последний в собственном туре» борта не
-        # годится в качестве этой эвристики — тур строится от ЕГО площадки,
-        # и его дальняя точка может быть где угодно, а не рядом с площадкой
-        # получателя (особенно если площадки не на одной прямой) — так один
-        # перенос уже валил соседство кластеров, которое честно построил
-        # Шаг 2, обратно в «шахматку».
+        # годится — тур строится от ЕГО площадки, и дальняя точка может быть
+        # где угодно, а не рядом с площадкой получателя: так один перенос
+        # валил соседство кластеров, построенное Шагом 2, в «шахматку».
         moved = min(clusters[slow_id], key=lambda t: _transit_cost_s(fast_vehicle, t))
         if not _solo_feasible(fast_vehicle, moved):
-            # Этому галсу быстрый БВС не по силам соло — переносить некуда,
-            # дальше в этом направлении баланс не улучшить.
+            # Этот галс быстрому БВС не по силам соло — переносить некуда.
             break
 
         # Внутри цикла — только «ближайший сосед», без 2-opt: точный тур
-        # нужен один раз на итоговом результате (ниже, в
-        # ``cluster_assign_and_route``), а не при каждом одиночном переносе —
-        # иначе на сцене из десятков галсов на борт балансировка сама по
-        # себе стала бы куда дороже самого перегона.
+        # строится один раз на итоговом распределении (см.
+        # ``cluster_assign_and_route``), иначе балансировка на десятках
+        # галсов на борт была бы дороже самого расчета.
         remaining = [t for t in clusters[slow_id] if t is not moved]
-        trial_slow = _nearest_neighbor_order(remaining, slow_vehicle.launch_point)
-        trial_fast = _nearest_neighbor_order(clusters[fast_id] + [moved], fast_vehicle.launch_point)
-        new_slow_cost = _cluster_total_cost_s(trial_slow, slow_vehicle)
-        new_fast_cost = _cluster_total_cost_s(trial_fast, fast_vehicle)
-        new_costs = dict(costs, **{slow_id: new_slow_cost, fast_id: new_fast_cost})
-        if max(new_costs.values()) - min(new_costs.values()) >= imbalance - 1e-9:
-            # Граничный галс достался бы соседу без чистого выигрыша в
-            # дисбалансе (типично — перенос лишь меняет местами, кто из двух
-            # бортов «медленный»): дальше в эту сторону не двигаемся.
-            break
+        clusters = dict(clusters)
+        clusters[slow_id] = _nearest_neighbor_order(remaining, slow_vehicle.launch_point)
+        clusters[fast_id] = _nearest_neighbor_order(clusters[fast_id] + [moved], fast_vehicle.launch_point)
+        costs = dict(costs)
+        costs[slow_id] = _vehicle_time_s(clusters[slow_id], slow_vehicle, overhead_s)
+        costs[fast_id] = _vehicle_time_s(clusters[fast_id], fast_vehicle, overhead_s)
 
-        clusters[slow_id], clusters[fast_id] = trial_slow, trial_fast
-        costs = new_costs
+        if max(costs.values()) < best_j1 - 1e-9:
+            best_j1, best_clusters = max(costs.values()), clusters
+            stale = 0
+        else:
+            stale += 1
+            if stale >= patience:
+                break
 
-    return clusters
+    return best_clusters
 
 
 # ---------- Разбиение тура на вылеты по бюджету (бывший Split) ----------
@@ -405,6 +431,7 @@ def cluster_assign_and_route(
     vehicles: list[Vehicle],
     max_balance_iterations: int = DEFAULT_MAX_BALANCE_ITERATIONS,
     balance_epsilon_s: float = DEFAULT_BALANCE_EPSILON_S,
+    sortie_overhead_s: float = DEFAULT_SORTIE_OVERHEAD_S,
 ) -> RoutingResult:
     """Шаги 2-4: взвешенная кластеризация по площадкам БВС, TSP-тур внутри
     кластера, балансировка узкого места — затем разбиение каждого
@@ -421,7 +448,9 @@ def cluster_assign_and_route(
 
     clusters, unassigned = _assign_to_nearest(tracks, vehicles)
     clusters = {v.id: _tsp_order(clusters[v.id], v.launch_point) for v in vehicles}
-    clusters = _balance_bottleneck(clusters, vehicles, max_balance_iterations, balance_epsilon_s)
+    clusters = _balance_bottleneck(
+        clusters, vehicles, max_balance_iterations, balance_epsilon_s, overhead_s=sortie_overhead_s
+    )
     # Внутри балансировки тур строился дешёвым «ближайшим соседом» (без
     # 2-opt, см. докстрочку _balance_bottleneck) — здесь, один раз на
     # итоговом распределении, доводим каждый тур до локального оптимума.
