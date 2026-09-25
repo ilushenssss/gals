@@ -162,6 +162,16 @@ export function NewTaskScreen() {
             <p className="muted sm">Парков нет — загрузите первый.</p>
           )}
         </div>
+        {/* Область рисуется на следующем экране; без этого пункта клики по
+            карте здесь выглядят как неработающее рисование. */}
+        <div className="section">
+          <div className="section-head">
+            <span className="cap">3 · Область облета</span>
+          </div>
+          <p className="muted sm">
+            Задается на следующем шаге — файлом GeoJSON или точками на карте. Нажмите «Далее: параметры задачи».
+          </p>
+        </div>
       </Sidebar>
       {uploadingEnv ? (
         <UploadEnvironmentModal
