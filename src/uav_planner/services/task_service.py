@@ -5,8 +5,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from shapely.errors import ShapelyError
 from shapely.geometry import shape
@@ -17,7 +18,7 @@ from uav_planner import repositories
 from uav_planner.api.deps import DEFAULT_USER
 from uav_planner.domain.errors import ConflictError, ValidationError
 from uav_planner.geometry import GeometryError, Projector, geodesic_distance_m, validate_polygon
-from uav_planner.schedule import daylight_window_utc_hours
+from uav_planner.schedule import work_window_utc
 
 from . import environment_service
 from . import fleet_service
@@ -25,7 +26,7 @@ from uav_planner.api.schemas.task import SURVEY_TYPES, TaskDetail, TaskSummary, 
 
 
 _SUMMARY_ONLY_EXCLUDE = {
-    "gsd_cm", "window_start", "window_end", "wind_speed_ms",
+    "gsd_cm", "window_start", "window_end", "timezone", "wind_speed_ms",
     "cloud_cover_pct", "criterion_mode", "criterion_alpha",
 }
 
@@ -55,22 +56,26 @@ def _to_summary(detail: TaskDetail) -> TaskSummary:
     return TaskSummary(**detail.model_dump(exclude=_SUMMARY_ONLY_EXCLUDE))
 
 
-def _hours_overlap(a: tuple[float, float], b: tuple[float, float]) -> bool:
-    return a[0] < b[1] and b[0] < a[1]
+def task_tzinfo(task: TaskDetail) -> tzinfo | None:
+    """Пояс окна работ задачи; ``None`` — UTC (задачи до появления поля)."""
+    return ZoneInfo(task.timezone) if task.timezone else None
 
 
-def _daylight_warning(area_geom: BaseGeometry, work_date: date, window_start: time | None, window_end: time | None) -> str | None:
+def _daylight_warning(
+    area_geom: BaseGeometry, work_date: date, window_start: time | None, window_end: time | None,
+    tz_name: str | None,
+) -> str | None:
     lat, lon = area_geom.centroid.y, area_geom.centroid.x
-    window = daylight_window_utc_hours(lat, lon, work_date)
-    if window is None:
+    tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    daylight = work_window_utc(lat, lon, work_date, tz=tz)
+    if daylight is None:
         return "Полярная ночь на эту дату в этих координатах — световой день отсутствует."
 
-    op_start = window_start.hour + window_start.minute / 60.0 if window_start else 0.0
-    op_end = window_end.hour + window_end.minute / 60.0 if window_end else 24.0
-    if not _hours_overlap((op_start, op_end), window):
+    if work_window_utc(lat, lon, work_date, window_start, window_end, tz) is None:
+        sunrise, sunset = (moment.astimezone(tz) for moment in daylight)
         return (
             "Окно работ не пересекается со световым днем для этой даты и координат "
-            "(восход/закат UTC: %.1f/%.1f ч) — вылеты будут невозможны." % window
+            f"(восход/закат: {sunrise:%H:%M}/{sunset:%H:%M}, {tz_name or 'UTC'}) — вылеты будут невозможны."
         )
     return None
 
@@ -149,6 +154,7 @@ def _validate(
     work_date: date,
     window_start: time | None,
     window_end: time | None,
+    tz_name: str | None,
     criterion_mode: str,
     criterion_alpha: float | None,
     area_geojson: dict[str, Any],
@@ -196,6 +202,11 @@ def _validate(
 
     if window_start is not None and window_end is not None and window_start > window_end:
         issues.append(TaskValidationIssue(field="window", message="начало окна работ позже его окончания"))
+    if tz_name is not None:
+        try:
+            ZoneInfo(tz_name)
+        except (ZoneInfoNotFoundError, ValueError):
+            issues.append(TaskValidationIssue(field="timezone", message=f"неизвестный часовой пояс: {tz_name!r}"))
 
     area_geom: BaseGeometry | None = None
     try:
@@ -250,13 +261,14 @@ def create_task(
     criterion_alpha: float | None,
     area_geojson: dict[str, Any],
     user: str = DEFAULT_USER,
+    tz_name: str | None = None,
 ) -> TaskSummary:
     env, fleet, alpha, area_geom = _validate(
         environment_id=environment_id, fleet_id=fleet_id, survey_type=survey_type, gsd_cm=gsd_cm,
-        work_date=work_date, window_start=window_start, window_end=window_end,
+        work_date=work_date, window_start=window_start, window_end=window_end, tz_name=tz_name,
         criterion_mode=criterion_mode, criterion_alpha=criterion_alpha, area_geojson=area_geojson,
     )
-    warning = _daylight_warning(area_geom, work_date, window_start, window_end)
+    warning = _daylight_warning(area_geom, work_date, window_start, window_end, tz_name)
 
     task_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
@@ -265,7 +277,7 @@ def create_task(
         fleet_id=fleet_id, fleet_name=fleet.name,
         survey_type=survey_type, work_date=work_date, status="Черновик", version=1,
         daylight_warning=warning, created_at=now, updated_at=now, gsd_cm=gsd_cm,
-        window_start=window_start, window_end=window_end, wind_speed_ms=wind_speed_ms,
+        window_start=window_start, window_end=window_end, timezone=tz_name, wind_speed_ms=wind_speed_ms,
         cloud_cover_pct=cloud_cover_pct, criterion_mode=criterion_mode, criterion_alpha=alpha,
         area=area_geojson, updated_by=user,
     )
@@ -289,6 +301,7 @@ def update_task(
     criterion_alpha: float | None,
     area_geojson: dict[str, Any],
     user: str = DEFAULT_USER,
+    tz_name: str | None = None,
 ) -> TaskSummary:
     """ЗАД.ФТ.9-10 (редактирование) + ЗАД.ФТ.12 (оптимистичная блокировка версии)."""
     existing = repositories.tasks.get(task_id)  # KeyError -> 404 в routes
@@ -308,10 +321,10 @@ def update_task(
     # Парк задачи сменить нельзя — он часть постановки, как и обстановка.
     env, fleet, alpha, area_geom = _validate(
         environment_id=existing.environment_id, fleet_id=existing.fleet_id, survey_type=survey_type,
-        gsd_cm=gsd_cm, work_date=work_date, window_start=window_start, window_end=window_end,
+        gsd_cm=gsd_cm, work_date=work_date, window_start=window_start, window_end=window_end, tz_name=tz_name,
         criterion_mode=criterion_mode, criterion_alpha=criterion_alpha, area_geojson=area_geojson,
     )
-    warning = _daylight_warning(area_geom, work_date, window_start, window_end)
+    warning = _daylight_warning(area_geom, work_date, window_start, window_end, tz_name)
 
     updated = existing.model_copy(update={
         "name": name, "survey_type": survey_type, "work_date": work_date,
@@ -320,7 +333,8 @@ def update_task(
         # задача возвращается в "Черновик" до нового расчета (ПЛН.ФТ.8).
         "status": "Черновик",
         "updated_at": datetime.now(timezone.utc), "gsd_cm": gsd_cm,
-        "window_start": window_start, "window_end": window_end, "wind_speed_ms": wind_speed_ms,
+        "window_start": window_start, "window_end": window_end, "timezone": tz_name,
+        "wind_speed_ms": wind_speed_ms,
         "cloud_cover_pct": cloud_cover_pct, "criterion_mode": criterion_mode,
         "criterion_alpha": alpha, "area": area_geojson, "updated_by": user,
     })

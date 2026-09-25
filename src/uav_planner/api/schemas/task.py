@@ -51,6 +51,9 @@ class TaskDetail(TaskSummary):
     gsd_cm: float
     window_start: time | None
     window_end: time | None
+    # IANA-пояс окна работ (например, «Europe/Moscow»): время начала и конца
+    # окна — местное в этом поясе. None — UTC (задачи до появления поля).
+    timezone: str | None = None
     wind_speed_ms: float | None
     cloud_cover_pct: float | None
     criterion_mode: CriterionMode

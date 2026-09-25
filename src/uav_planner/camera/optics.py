@@ -11,6 +11,7 @@ b = A * (1 - q_прод)                             (шаг срабатыва�
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from .errors import CameraError
@@ -35,6 +36,22 @@ def survey_height(camera: CameraSpec, gsd_cm: float) -> float:
         raise ValueError("gsd_cm должен быть положительным")
     gsd_m = gsd_cm / 100.0
     return gsd_m * camera.focal_length_mm * camera.frame_width_px / camera.sensor_width_mm
+
+
+def max_gsd_for_height(camera: CameraSpec, max_height_m: float) -> float:
+    """Наибольший GSD (см/пиксель), при котором высота съемки H не выше
+    ``max_height_m``: обратная к ``survey_height`` формула
+    GSD_max = H_max · s_w / (f · N_w), округленная ВНИЗ до 0.1 см — так
+    рекомендованное оператору значение гарантированно укладывается в предел,
+    а не превышает его на доли метра из-за округления.
+
+    Чем крупнее GSD, тем выше полет, поэтому при превышении потолка GSD нужно
+    уменьшать (задавать более детальную съемку), а не увеличивать.
+    """
+    if max_height_m <= 0:
+        raise ValueError("max_height_m должен быть положительным")
+    gsd_cm = max_height_m * camera.sensor_width_mm / (camera.focal_length_mm * camera.frame_width_px) * 100.0
+    return math.floor(gsd_cm * 10.0 + 1e-9) / 10.0
 
 
 def swath_width(camera: CameraSpec, height_m: float) -> float:
@@ -110,9 +127,13 @@ def plan_survey_geometry(
             f"высота съемки {height_m:.1f} м вне высотного диапазона модели «{uav_model_key}»"
         )
     if height_m > max_altitude_m:
+        # Раньше здесь советовали «более крупный GSD» — это наоборот: крупнее
+        # GSD — выше полет. Оператору нужно конкретное число, а не направление.
+        gsd_max = max_gsd_for_height(camera, max_altitude_m)
         raise CameraError(
             f"высота съемки {height_m:.1f} м для GSD {gsd_cm:g} см превышает допустимый потолок "
-            f"{max_altitude_m:.0f} м — задайте более крупный GSD или другую камеру"
+            f"{max_altitude_m:.0f} м — уменьшите требуемое GSD до {gsd_max:g} см/пиксель или меньше "
+            f"(максимально допустимое для камеры «{camera.name}» при потолке {max_altitude_m:.0f} м)"
         )
 
     swath_m = swath_width(camera, height_m)

@@ -1,5 +1,5 @@
-# Один образ на три роли: api, worker и одноразовый migrate — различаются
-# только командой запуска (см. docker-compose.yml).
+# Один образ на четыре роли: api, worker, beat и одноразовый migrate —
+# различаются только командой запуска (см. docker-compose.yml).
 
 FROM python:3.12-slim AS builder
 

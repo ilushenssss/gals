@@ -57,6 +57,9 @@ class Task(Base):
     work_date: Mapped[date] = mapped_column(Date, nullable=False)
     window_start: Mapped[time | None] = mapped_column(Time, nullable=True)
     window_end: Mapped[time | None] = mapped_column(Time, nullable=True)
+    # IANA-пояс, в котором задано окно работ (местное время оператора).
+    # NULL — задача создана до появления поля, окно понимается как UTC.
+    timezone: Mapped[str | None] = mapped_column(Text, nullable=True)
     wind_speed_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     cloud_cover_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     criterion_mode: Mapped[str] = mapped_column(String(32), nullable=False)

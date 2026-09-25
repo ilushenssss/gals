@@ -1,26 +1,25 @@
 """Оркестрация расчета плана — первая версия модуля «Планирование».
 
 Пайплайн: Environment + Task + Fleet -> рабочая область (``geometry``) ->
-высота съемки и шаг галсов (``camera``) -> декомпозиция и галсы (``coverage``)
--> распределение и разбиение на вылеты (``routing``, LPT-эвристика) ->
-расписание (``schedule``, световой день) -> метрики J1/J2 -> ``Plan``.
+для каждой группы «модель + камера» (кандидата): высота съемки и шаг галсов
+(``camera``) -> декомпозиция и галсы (``coverage``) -> кластеризация по
+площадкам, тур и балансировка (``routing``) -> обход зон на переходах
+(``visibility``) и облет рельефа (``terrain``) -> расписание (``schedule``,
+световой день и окно работ в поясе задачи) -> метрики J1/J2 -> выбор лучшего
+кандидата по критерию задачи -> ``Plan``.
 
 См. docs/trebovania/Планирование.md (ПЛН.ФТ.1-10) и docs/trebovania/
-Математическая_модель.md. Известные упрощения первой версии — см.
-``README.md``, раздел про модуль «Планирование»:
-  - одна модель БВС на план — группа готовых экземпляров с совместимой
-    нагрузкой, в которой больше всего экземпляров (смешанный парк в одной
-    задаче — будущая версия);
+Математическая_модель.md; расхождения с ТЗ — docs/AUDIT.md. Известные
+упрощения первой версии:
+  - одна модель БВС на план — выбирается лучший из кандидатов «модель+камера»
+    (смешанный парк в одной задаче — будущая версия);
   - крейсерская скорость = паспортный максимум модели минус скорость ветра
-    задачи (без учета направления — консервативная оценка, до полной модели
-    ветра в модуле ``motion``);
-  - переходы между галсами и до площадки — прямые линии без учета препятствий
-    (граф видимости — модуль ``visibility``, пока не реализован);
-  - площадка старта/посадки — первая ВПП обстановки, иначе центроид рабочей
-    области;
+    задачи (без учета направления — консервативная оценка); ветер выше
+    допустимого для модели отбрасывает кандидата;
+  - развороты между галсами не моделируются (прямые переходы или обход A*);
   - расчет не сохраняет промежуточное допустимое решение, поэтому остановка по
     лимиту времени (ПЛН.ФТ.3) фиксируется статусом, но отдать «лучшее из
-    найденного» нечего — это появится вместе с решателем OR-Tools.
+    найденного» нечего.
 
 Расчет выполняется фоновой работой (``jobs/tasks.py``), а независимая проверка
 результата — отдельный модуль «Проверка безопасности».
@@ -31,7 +30,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from shapely.geometry import LineString, MultiLineString, Point, mapping, shape
@@ -43,7 +42,7 @@ from uav_planner.domain.errors import ConflictError, ValidationError
 from uav_planner.domain.errors import PlanInfeasibleError as _DomainPlanInfeasibleError
 from uav_planner.camera import CAMERA_SPECS, CameraError, SurveyGeometry, plan_survey_geometry
 from uav_planner.coverage import boustrophedon_cells, generate_tracks, split_long_track
-from uav_planner.fleet import DEFAULT_ENERGY_RESERVE, FLEET_MODELS, UavModelSpec, flight_time_budget_s
+from uav_planner.fleet import FLEET_MODELS, UavModelSpec, flight_time_budget_s
 from uav_planner.geometry import (
     AllowedZone,
     GeometryError,
@@ -56,14 +55,15 @@ from uav_planner.geometry import (
 )
 from uav_planner.jobs.progress import CandidateProgress, ProgressReporter
 from uav_planner.logging_setup import log_context
-from uav_planner.routing import Sortie, Track, Vehicle, cluster_assign_and_route
-from uav_planner.schedule import ScheduleError, assign_timestamps
+from uav_planner.routing import Sortie, Track, Vehicle, cluster_assign_and_route, split_into_sorties
+from uav_planner.schedule import DEFAULT_LAUNCH_INTERVAL_S, ScheduleError, assign_timestamps, work_window_utc
 from uav_planner.terrain import (
     ConstantElevationProvider,
     ElevationLookupError,
     ElevationProvider,
     plan_altitude_profile,
 )
+from uav_planner.safety import SortieTrack, check_separation
 from uav_planner.visibility import find_path
 from uav_planner.config import get_settings
 
@@ -82,10 +82,21 @@ SPECTRUM_BY_SURVEY_TYPE = {
 
 SORTIE_PENALTY_S = 60.0  # λ в J2 — вес одного вылета (износ на взлете/посадке)
 MIN_EFFECTIVE_SPEED_MPS = 1.0
+# Сколько раз можно сдвинуть взлет борта на интервал выпуска, разводя его по
+# времени с уже расписанными бортами (60 × 60 с — до часа задержки).
+MAX_DECONFLICT_DELAYS = 60
+# Сколько раз за расчет кандидата можно перерезать вылет, который после
+# обхода зон (A*) вышел за энергобюджет — защита от зацикливания.
+MAX_BUDGET_RESPLITS = 50
 
 _SUMMARY_ONLY_EXCLUDE = {"sorties"}
 
 log = logging.getLogger(__name__)
+# Внутри build_candidate имя ``log`` занято историей расчета (список строк),
+# поэтому журнал там — через это имя. Раньше там звался ``log.warning`` на
+# списке, и недоступный рельеф ронял весь расчет AttributeError'ом вместо
+# честной деградации на плоскую высоту.
+_logger = log
 
 
 class PlanInfeasibleError(_DomainPlanInfeasibleError):
@@ -123,10 +134,6 @@ def _to_summary(detail: PlanDetail) -> PlanSummary:
 
 def _valid_features(env, layer: str) -> list[dict]:
     return [f for f in env.layers.get(layer, []) if f.get("properties", {}).get("_valid", True)]
-
-
-def _time_to_hours(t: time | None) -> float | None:
-    return None if t is None else t.hour + t.minute / 60.0 + t.second / 3600.0
 
 
 def _survey_type_spectrum(survey_type: str) -> str:
@@ -265,6 +272,27 @@ def _build_sortie_legs(
     return legs
 
 
+def _route_line(legs: list[RouteLeg]) -> LineString:
+    """Маршрут вылета одной ломаной (UTM, 2D) — из этапов, как и в карточке
+    плана."""
+    coords: list[tuple[float, float]] = []
+    for leg in legs:
+        leg_2d = [(c[0], c[1]) for c in leg.coords]
+        coords.extend(leg_2d if not coords else leg_2d[1:])
+    return LineString(coords)
+
+
+def _conflicts(new_tracks: list[SortieTrack], placed: list[SortieTrack], min_separation_m: float) -> bool:
+    """Сближается ли хоть один вылет ``new_tracks`` с уже расписанными
+    вылетами других бортов ближе ``min_separation_m`` (тот же точный расчет
+    наибольшего сближения, что у проверки безопасности)."""
+    return any(
+        not check_separation([new, other], min_separation_m).passed
+        for new in new_tracks
+        for other in placed
+    )
+
+
 def _apply_terrain_profile(
     legs: list[RouteLeg],
     start_point: Point,
@@ -376,14 +404,29 @@ def _pick_best_candidate(candidates: list[_Candidate], criterion_alpha: float, c
     return winner
 
 
-def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanSummary:
+def create_plan(
+    task_id: str,
+    progress: ProgressReporter | None = None,
+    *,
+    extra_no_fly_buffer_m: float = 0.0,
+) -> PlanSummary:
     """Полный конвейер расчета (ПЛН.ФТ.5).
 
     ``progress`` — необязательный репортер фонового расчета: он публикует
     стадию и процент и на каждом тике поднимает ``JobCancelled``, если
     оператор нажал «Отменить». Синхронный вызов (существующие тесты, отладка)
     передает ``None``, и поведение функции не меняется ни на шаг.
+
+    ``extra_no_fly_buffer_m`` — скорректированный запрос автопересчета
+    (БЕЗ.ФТ.3, «геозона → перестроить перелет»): запас, добавляемый к буферу
+    каждой БПЗ и каждого препятствия из обстановки. Рабочая область, галсы и
+    обход A* на переходах строятся уже от расширенных контуров, поэтому
+    маршрут отходит от запретной зоны дальше, чем требует сама обстановка.
+    Проверка безопасности по-прежнему сверяет план с исходными зонами — запас
+    остается запасом, а не новым правилом.
     """
+    if extra_no_fly_buffer_m < 0:
+        raise ValueError("extra_no_fly_buffer_m не может быть отрицательным")
     progress = progress or ProgressReporter(None)
     progress.stage("load")
     task = task_service.get_task(task_id)
@@ -420,6 +463,15 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         + ", ".join(f"{FLEET_MODELS[mk].name} + камера {CAMERA_SPECS[ck].name}" for mk, ck in groups) + ").",
     ]
 
+    adjustment_note: str | None = None
+    if extra_no_fly_buffer_m > 0:
+        adjustment_note = (
+            "по результатам проверки безопасности (пересечение запретных зон) буфер вокруг каждой БПЗ "
+            f"и препятствия увеличен на {extra_no_fly_buffer_m:g} м сверх заданного в обстановке — "
+            "рабочая область и переходы перестроены"
+        )
+        intro_log.append(adjustment_note[0].upper() + adjustment_note[1:] + ".")
+
     area_geom = shape(task.area)
     airspace_feats = _valid_features(env, "airspace")
     no_fly_feats = _valid_features(env, "no_fly")
@@ -435,14 +487,19 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
             id=str(i),
             polygon=projector.to_utm(shape(f["geometry"])),
             height=HeightRange(float(f["properties"]["h_min"]), float(f["properties"]["h_max"])),
+            active_windows=environment_service.parse_time_windows(f["properties"].get("active_windows")),
         )
         for i, f in enumerate(airspace_feats)
     ]
+    # Интервалы действия БПЗ при планировании не используются — БПЗ
+    # обходится всегда (консервативно, момент вылета еще неизвестен). Точное
+    # сравнение с временем каждого вылета делает проверка безопасности.
     no_fly_zones = [
         NoFlyZone(
             id=str(i),
             polygon=projector.to_utm(shape(f["geometry"])),
-            safety_buffer_m=float(f["properties"].get("safety_buffer_m", 0.0)),
+            safety_buffer_m=float(f["properties"].get("safety_buffer_m", 0.0)) + extra_no_fly_buffer_m,
+            active_windows=environment_service.parse_time_windows(f["properties"].get("active_windows")),
         )
         for i, f in enumerate(no_fly_feats)
     ]
@@ -451,6 +508,9 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
             id=str(i),
             polygon=projector.to_utm(shape(f["geometry"])),
             height=HeightRange(float(f["properties"]["h_min"]), float(f["properties"]["h_max"])),
+            # Раньше буфер препятствия из обстановки сюда не передавался (у
+            # БПЗ — передавался): галсы подходили к препятствию вплотную.
+            safety_buffer_m=float(f["properties"].get("safety_buffer_m", 0.0)) + extra_no_fly_buffer_m,
         )
         for i, f in enumerate(obstacle_feats)
     ]
@@ -468,8 +528,23 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
     }
 
     lat, lon = area_geom.centroid.y, area_geom.centroid.x
-    window_start_hour = _time_to_hours(task.window_start) or 0.0
-    window_end_hour = _time_to_hours(task.window_end) or 24.0
+    tz = task_service.task_tzinfo(task)
+    tz_label = task.timezone or "UTC"
+
+    # Разрешенная зона с интервалами действия годится для плана, только если
+    # действует все окно работ даты задачи (консервативно: какой вылет когда
+    # взлетит, станет известно лишь после расписания). Если на дату рабочих
+    # часов нет вовсе, фильтровать не по чему — расписание само перенесет
+    # вылеты, а проверка безопасности сверит зоны с их фактическим временем.
+    effective_window = work_window_utc(lat, lon, task.work_date, task.window_start, task.window_end, tz)
+    planning_allowed_zones = allowed_zones
+    if effective_window is not None:
+        planning_allowed_zones = [z for z in allowed_zones if z.is_active_throughout(*effective_window)]
+        if allowed_zones and not planning_allowed_zones:
+            raise PlanInfeasibleError(
+                "ни одна зона разрешенного воздушного пространства не действует в течение всего окна работ "
+                f"{task.work_date.isoformat()} — измените дату/окно работ или интервалы действия зон"
+            )
 
     # Один провайдер на весь расчет (все кандидаты) — его кэш по координатам
     # тогда работает и между кандидатами, не только внутри одного. Профиль
@@ -487,6 +562,14 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         camera = CAMERA_SPECS[camera_key]
         log: list[str] = []
         tick.stage("Геометрия съемки", 0.0)
+        wind_speed = task.wind_speed_ms or 0.0
+        if wind_speed > model.max_wind_ms:
+            # ПЛН.ФТ.10: превышение ветрового ограничения модели — причина
+            # невыполнимости, а не повод молча считать с урезанной скоростью.
+            raise PlanInfeasibleError(
+                f"ветер задачи {wind_speed:g} м/с превышает допустимый для модели «{model.name}» "
+                f"({model.max_wind_ms:g} м/с)"
+            )
         try:
             survey_geometry = plan_survey_geometry(model_key, camera_key, task.gsd_cm)
         except CameraError as exc:
@@ -517,7 +600,7 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         # чтобы он не выпускал маршрут за границу разрешенного пространства
         # (раньше проверялись только явные препятствия, см. _build_sortie_legs).
         active_allowed = [
-            zone.polygon for zone in allowed_zones
+            zone.polygon for zone in planning_allowed_zones
             if zone.height.contains(survey_geometry.height_m) and zone.is_active_at()
         ]
         allowed_union = unary_union(active_allowed) if active_allowed else None
@@ -525,7 +608,7 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         tick.stage("Построение рабочей области", 0.10)
         try:
             working_area = compute_working_area(
-                area_utm, allowed_zones, no_fly_zones, obstacles, survey_geometry.height_m
+                area_utm, planning_allowed_zones, no_fly_zones, obstacles, survey_geometry.height_m
             )
         except GeometryError as exc:
             raise PlanInfeasibleError(str(exc)) from exc
@@ -553,13 +636,12 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
             f"{sum(t.length for t in raw_tracks) / 1000.0:.1f} км с шагом {survey_geometry.track_spacing_m:.1f} м."
         )
 
-        wind_speed = task.wind_speed_ms or 0.0
         cruise_speed = max(model.speed_ms.max_ms - wind_speed, MIN_EFFECTIVE_SPEED_MPS)
-        budget_s = flight_time_budget_s(model)
+        budget_s = flight_time_budget_s(model, settings.energy_reserve, settings.maneuver_margin)
         log.append(
             "Энергобюджет вылета: T_бюдж = T_max·(1−η)·(1−m_ман) = "
-            f"{model.max_flight_time_min * 60:.0f}·(1−{DEFAULT_ENERGY_RESERVE:.2f})·(1−0) = {budget_s:.0f} с "
-            f"({budget_s / 60.0:.1f} мин)."
+            f"{model.max_flight_time_min * 60:.0f}·(1−{settings.energy_reserve:.2f})·(1−{settings.maneuver_margin:.2f}) "
+            f"= {budget_s:.0f} с ({budget_s / 60.0:.1f} мин)."
         )
 
         vehicles = [
@@ -600,12 +682,35 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         active_provider: ElevationProvider = (
             real_elevation_provider if real_elevation_provider is not None else ConstantElevationProvider(0.0)
         )
+        resplit_count = 0
         for vehicle_index, vehicle in enumerate(vehicles):
             tick.span("Обход зон на переходах", vehicle_index, len(vehicles), (0.55, 0.80))
             launch_name = launch_name_by_vehicle[vehicle.id]
-            for sortie in routing_result.sorties_by_vehicle.get(vehicle.id, []):
+            pending = list(routing_result.sorties_by_vehicle.get(vehicle.id, []))
+            final_sorties: list[Sortie] = []
+            while pending:
+                sortie = pending.pop(0)
                 legs = _build_sortie_legs(sortie, vehicle.launch_point, launch_name, restricted_zones, allowed_union)
-                sortie.flight_time_s = sum(leg.length_m for leg in legs) / cruise_speed
+                actual_s = sum(leg.length_m for leg in legs) / cruise_speed
+                if actual_s > budget_s and len(sortie.tracks) > 1 and resplit_count < MAX_BUDGET_RESPLITS:
+                    # Маршрутизация оценивала переходы по прямой, а обход зон
+                    # удлинил их, и вылет перестал укладываться в бюджет. Его
+                    # галсы перерезаются заново с бюджетом, уменьшенным в
+                    # той же пропорции (прямая/факт), — и новые вылеты снова
+                    # проходят обход зон. Одиночный галс резать некуда: такой
+                    # вылет остается как есть, и его честно отметит проверка
+                    # безопасности («Энергия»).
+                    shrunk = Vehicle(
+                        id=vehicle.id, speed_mps=vehicle.speed_mps,
+                        budget_s=budget_s * sortie.flight_time_s / actual_s,
+                        launch_point=vehicle.launch_point,
+                    )
+                    parts, leftover = split_into_sorties(sortie.tracks, shrunk)
+                    if len(parts) > 1 and not leftover:
+                        resplit_count += 1
+                        pending[0:0] = parts
+                        continue
+                sortie.flight_time_s = actual_s
                 if any(leg.fallback for leg in legs):
                     any_transit_fallback = True
 
@@ -626,7 +731,7 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
                 except ElevationLookupError as exc:
                     if active_provider is real_elevation_provider:
                         terrain_unavailable_reason = str(exc)
-                        log.warning(
+                        _logger.warning(
                             "рельеф недоступен — высота остаётся абсолютной",
                             extra={"model_key": model_key, "camera_key": camera_key, "reason": terrain_unavailable_reason},
                         )
@@ -637,6 +742,13 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
                     )
 
                 sortie_legs[id(sortie)] = legs
+                final_sorties.append(sortie)
+            routing_result.sorties_by_vehicle[vehicle.id] = final_sorties
+        if resplit_count:
+            log.append(
+                f"Обход зон удлинил переходы, и {resplit_count} вылет(ов) перестали укладываться в энергобюджет — "
+                "их галсы перераспределены на дополнительные вылеты."
+            )
 
         if terrain_unavailable_reason is not None:
             log.append(f"Рельеф недоступен ({terrain_unavailable_reason}) — высота держится абсолютной.")
@@ -651,17 +763,49 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         plan_start: datetime | None = None
         plan_end: datetime | None = None
 
+        # Борта одной площадки взлетают по очереди, а не в одну секунду (см.
+        # schedule.DEFAULT_LAUNCH_INTERVAL_S): очередь считается только по
+        # бортам, которым вообще достались вылеты.
+        launches_at_site: dict[tuple[float, float], int] = {}
+        scheduled_tracks: list[SortieTrack] = []
+        deconflict_delays = 0
         for vehicle_index, vehicle in enumerate(vehicles):
             tick.span("Расписание вылетов", vehicle_index, len(vehicles), (0.80, 0.98))
             launch_name = launch_name_by_vehicle[vehicle.id]
             sorties = routing_result.sorties_by_vehicle.get(vehicle.id, [])
-            try:
-                scheduled = assign_timestamps(
-                    sorties, lat, lon, task.work_date,
-                    window_start_hour=window_start_hour, window_end_hour=window_end_hour,
-                )
-            except ScheduleError as exc:
-                raise PlanInfeasibleError(str(exc)) from exc
+            site_key = (round(vehicle.launch_point.x, 1), round(vehicle.launch_point.y, 1))
+            launch_rank = launches_at_site.get(site_key, 0)
+            if sorties:
+                launches_at_site[site_key] = launch_rank + 1
+            # Разведение по времени: если расписание борта сближает его с уже
+            # расписанным бортом ближе D_min, его вылеты сдвигаются на
+            # интервал выпуска, пока конфликт не исчезнет (не больше
+            # MAX_DECONFLICT_DELAYS раз). Раньше конфликтов не искали вовсе —
+            # борта с соседних галсов на границе кластеров шли одновременно
+            # в десятках метров друг от друга. Что не удалось развести,
+            # честно отметит проверка безопасности («Разведение»).
+            offset_s = launch_rank * DEFAULT_LAUNCH_INTERVAL_S
+            for attempt in range(MAX_DECONFLICT_DELAYS + 1):
+                try:
+                    scheduled = assign_timestamps(
+                        sorties, lat, lon, task.work_date,
+                        window_start=task.window_start, window_end=task.window_end, tz=tz,
+                        start_offset_s=offset_s,
+                    )
+                except ScheduleError as exc:
+                    raise PlanInfeasibleError(str(exc)) from exc
+                candidate_tracks = [
+                    SortieTrack(vehicle.id, _route_line(sortie_legs[id(sched.sortie)]), sched.start_utc,
+                                sched.end_utc, cruise_speed)
+                    for sched in scheduled
+                ]
+                if attempt == MAX_DECONFLICT_DELAYS or not _conflicts(
+                    candidate_tracks, scheduled_tracks, settings.separation_distance_m
+                ):
+                    break
+                offset_s += DEFAULT_LAUNCH_INTERVAL_S
+                deconflict_delays += 1
+            scheduled_tracks.extend(candidate_tracks)
 
             for idx, sched in enumerate(scheduled):
                 legs = sortie_legs[id(sched.sortie)]
@@ -714,14 +858,20 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
                 plan_start = sched.start_utc if plan_start is None else min(plan_start, sched.start_utc)
                 plan_end = sched.end_utc if plan_end is None else max(plan_end, sched.end_utc)
 
+        if deconflict_delays:
+            log.append(
+                f"Разведение по времени: взлеты сдвинуты {deconflict_delays} раз(а) на "
+                f"{DEFAULT_LAUNCH_INTERVAL_S:.0f} с, чтобы борта не сближались ближе "
+                f"{settings.separation_distance_m:.0f} м."
+            )
         j1_s = (plan_end - plan_start).total_seconds() if plan_start and plan_end else 0.0
         j2_s = total_flight_s + SORTIE_PENALTY_S * len(plan_sorties)
 
         if plan_start and plan_end:
             log.append(
                 f"Расписание с учетом светового дня на {task.work_date.isoformat()} для координат "
-                f"({lat:.2f}, {lon:.2f}): первый вылет в {plan_start:%H:%M} UTC, "
-                f"последний закончится в {plan_end:%H:%M} UTC."
+                f"({lat:.2f}, {lon:.2f}): первый вылет в {plan_start.astimezone(tz or timezone.utc):%H:%M}, "
+                f"последний закончится в {plan_end.astimezone(tz or timezone.utc):%H:%M} ({tz_label})."
             )
         log.append(
             f"Итог по кандидату «{model.name} + камера {camera.name}»: "
@@ -784,7 +934,7 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         is_optimal=False,
         uav_model=best.model.name,
         sortie_count=len(best.plan_sorties),
-        warnings=best.warnings,
+        warnings=([adjustment_note] if adjustment_note else []) + best.warnings,
         model_key=best.model_key,
         camera_key=best.camera_key,
         height_m=best.survey_geometry.height_m,

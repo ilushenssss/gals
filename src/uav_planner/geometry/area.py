@@ -51,6 +51,14 @@ class TimeWindow:
     def contains(self, when: datetime) -> bool:
         return self.start <= when <= self.end
 
+    def covers(self, start: datetime, end: datetime) -> bool:
+        """Интервал целиком внутри окна."""
+        return self.start <= start and end <= self.end
+
+    def overlaps(self, start: datetime, end: datetime) -> bool:
+        """Интервал хотя бы частично пересекается с окном."""
+        return self.start < end and start < self.end
+
 
 def _is_active_at(active_windows: Optional[Sequence[TimeWindow]], when: Optional[datetime]) -> bool:
     """Зона без заданных интервалов действует всегда. При запросе без момента
@@ -76,6 +84,11 @@ class AllowedZone:
     def is_active_at(self, when: Optional[datetime] = None) -> bool:
         return _is_active_at(self.active_windows, when)
 
+    def is_active_throughout(self, start: datetime, end: datetime) -> bool:
+        """Разрешенная зона годится для полета на интервале, только если она
+        действует на нем целиком (зона без интервалов — всегда)."""
+        return not self.active_windows or any(w.covers(start, end) for w in self.active_windows)
+
 
 @dataclass(frozen=True)
 class NoFlyZone:
@@ -94,6 +107,11 @@ class NoFlyZone:
 
     def is_active_at(self, when: Optional[datetime] = None) -> bool:
         return _is_active_at(self.active_windows, when)
+
+    def is_active_during(self, start: datetime, end: datetime) -> bool:
+        """БПЗ запрещает полет на интервале, если действует хотя бы в какой-то
+        его момент (зона без интервалов — всегда)."""
+        return not self.active_windows or any(w.overlaps(start, end) for w in self.active_windows)
 
 
 @dataclass(frozen=True)

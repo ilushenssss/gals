@@ -55,13 +55,15 @@ def _as_polygons(geom: BaseGeometry) -> list[BaseGeometry]:
     return []  # линии/точки — не вносят площади, игнорируем
 
 
-def _safe_union(a: BaseGeometry, b: BaseGeometry) -> BaseGeometry:
+def _safe_union(a: BaseGeometry, b: BaseGeometry) -> Optional[BaseGeometry]:
+    """Объединение открытой ячейки с компонентом новой полосы, если оно
+    остается одним полигоном; ``None`` — не сливаются (касание в точке,
+    численный зазор). Раньше из MultiPolygon молча бралась наибольшая часть,
+    и остальная площадь выпадала из декомпозиции — нарушалось ⋃Cᵢ = W."""
     merged = unary_union([a, b])
     if not merged.is_valid:
         merged = merged.buffer(0)
-    if merged.geom_type == "MultiPolygon":
-        merged = max(merged.geoms, key=lambda g: g.area)
-    return merged
+    return merged if merged.geom_type == "Polygon" else None
 
 
 def _match_components(
@@ -118,7 +120,15 @@ def _decompose_polygon(
 
         matched = _match_components(open_cells, components) if open_cells else None
         if matched is not None:
-            open_cells = [_safe_union(oc, comp) for oc, comp in matched]
+            next_open: list[BaseGeometry] = []
+            for oc, comp in matched:
+                merged = _safe_union(oc, comp)
+                if merged is None:
+                    finished.append(oc)  # не слилось — ячейка закрыта, компонент открывает новую
+                    next_open.append(comp)
+                else:
+                    next_open.append(merged)
+            open_cells = next_open
         else:
             finished.extend(open_cells)
             open_cells = components

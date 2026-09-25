@@ -63,7 +63,7 @@ T_min) — это и есть надбавка к критерию J1 (min-max),
 дословно:**
   - БВС ограничен не только энергией «за раз», а вылетает несколько раз
     (замена АКБ) — кластер режется на вылеты по бюджету уже после
-    балансировки (``_split_into_sorties``, бывший Split из ``greedy.py``),
+    балансировки (``split_into_sorties``, бывший Split из ``greedy.py``),
     один и тот же алгоритм разбиения, что и раньше;
   - переходы на Шагах 2-4 оцениваются по прямой (Евклидово расстояние), без
     обхода бесполетных зон/препятствий — так же, как раньше в Split: честный
@@ -355,7 +355,7 @@ def _balance_bottleneck(
 
 # ---------- Разбиение тура на вылеты по бюджету (бывший Split) ----------
 
-def _split_into_sorties(order: list[Track], vehicle: Vehicle) -> tuple[list[Sortie], list[Track]]:
+def split_into_sorties(order: list[Track], vehicle: Vehicle) -> tuple[list[Sortie], list[Track]]:
     """Режет уже упорядоченный (Шагами 2-4) список галсов одного БВС на
     вылеты по энергобюджету — тот же принцип, что и раньше: переход до
     следующего галса и зарезервированный обратный переход должны укладываться
@@ -429,7 +429,7 @@ def cluster_assign_and_route(
 
     sorties_by_vehicle: dict[str, list[Sortie]] = {}
     for v in vehicles:
-        sorties, leftover = _split_into_sorties(clusters[v.id], v)
+        sorties, leftover = split_into_sorties(clusters[v.id], v)
         sorties_by_vehicle[v.id] = sorties
         unassigned.extend(leftover)
 

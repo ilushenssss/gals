@@ -1,12 +1,19 @@
 """Оркестрация модуля «Проверка безопасности» — независимая от расчетного
 ядра проверка готового плана. См. docs/trebovania/Проверка_безопасности.md
-(БЕЗ.ФТ.1-6) и uav_planner.safety (семь чистых проверок).
+(БЕЗ.ФТ.1-6) и uav_planner.safety (восемь чистых проверок).
 
 Модуль сознательно не переиспользует внутренние объекты ``plan_service``
 (зоны, рабочую область) — заново разбирает слои обстановки из тех же исходных
 данных, что и «Планирование», но собственным кодом. Так ошибка в допущениях
 или парсинге ядра не повторится незамеченной в проверке (см. «контракт между
 ролями» плана реализации: проверку пишет роль «И», независимо от ядра).
+Общие с «Планированием» здесь только разбор интервалов действия зон
+(``environment_service.parse_time_windows`` — формат данных обстановки,
+а не допущение ядра) и формула светового дня (``schedule.work_window_utc``).
+
+Интервалы действия зон проверка, в отличие от планирования, сверяет точно —
+с фактическим временем каждого вылета: разрешенная зона засчитывается,
+только если действует весь вылет, БПЗ — если действует хотя бы часть его.
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from uav_planner import repositories
+from uav_planner.camera import CAMERA_SPECS, DEFAULT_MAX_ALTITUDE_M, max_gsd_for_height
 from uav_planner.config import get_settings
 from uav_planner.domain.errors import GalsError
 from uav_planner.geometry import (
@@ -78,10 +86,6 @@ class SafetyCheckError(GalsError, ValueError):
 
 def _valid_features(env, layer: str) -> list[dict]:
     return [f for f in env.layers.get(layer, []) if f.get("properties", {}).get("_valid", True)]
-
-
-def _time_to_hours(t) -> float | None:
-    return None if t is None else t.hour + t.minute / 60.0 + t.second / 3600.0
 
 
 def _agl_by_point(sample_points_utm: list[Point], projector: Projector) -> list[tuple[Point, float]] | None:
@@ -157,7 +161,97 @@ def _combine(
     )
 
 
-def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
+def _altitude_recommendations(task, plan: PlanDetail, max_agl_m: float) -> list[str]:
+    """Высота выше потолка: единственный параметр, который ее задает, — GSD
+    задачи (H = GSD·f·N_w/s_w), и менять его вправе только оператор. Поэтому
+    не автопересчет, а конкретное число: максимально допустимое GSD, при
+    котором и номинальная высота, и наибольшее найденное превышение над
+    рельефом (облет рельефа ограничен углом набора и местами отстает от
+    поверхности) укладываются в потолок."""
+    camera = CAMERA_SPECS.get(plan.camera_key)
+    limit = DEFAULT_MAX_ALTITUDE_M
+    if camera is None:
+        return [f"Уменьшите требуемое GSD задачи, чтобы высота полета не превышала {limit:.0f} м."]
+    excess_m = max(0.0, max_agl_m - plan.height_m)
+    allowed_height_m = limit - excess_m
+    if allowed_height_m <= 0:
+        return [
+            f"Превышение над рельефом на маршруте ({excess_m:.0f} м) само больше потолка {limit:.0f} м — "
+            "уменьшением GSD не исправить: измените область облета."
+        ]
+    gsd_max = max_gsd_for_height(camera, allowed_height_m)
+    terrain_note = (
+        f" (номинальная высота не выше {allowed_height_m:.0f} м — с запасом на превышение над рельефом "
+        f"до {excess_m:.0f} м, найденное на маршруте)"
+        if excess_m >= 0.5 else ""
+    )
+    return [
+        f"Уменьшите требуемое разрешение съемки: GSD {task.gsd_cm:g} → не более {gsd_max:g} см/пиксель — "
+        f"максимально допустимое для камеры «{camera.name}» при ограничении высоты {limit:.0f} м{terrain_note}. "
+        "Затем пересчитайте план."
+    ]
+
+
+def _geozone_recommendations(applied_extra_buffer_m: float) -> list[str]:
+    step = get_settings().recalc_no_fly_buffer_step_m
+    if applied_extra_buffer_m > 0:
+        return [
+            f"Автоматический пересчет уже перестроил маршрут с дополнительным буфером {applied_extra_buffer_m:g} м "
+            "вокруг запретных зон и препятствий, но пересечение осталось: обход в пределах сетки поиска не найден "
+            "(зона перекрывает путь целиком или проход слишком узкий). Измените площадку вылета или область облета "
+            "либо границы зоны в обстановке.",
+        ]
+    return [
+        "Добавьте буферное пространство вокруг запретной зоны (safety_buffer_m в обстановке) и пересчитайте план — "
+        "маршрут будет перестроен в обход расширенной зоны. Автоматический пересчет делает это сам: "
+        f"+{step:g} м к буферу за каждую попытку.",
+    ]
+
+
+_STATIC_RECOMMENDATIONS = {
+    "airspace": [
+        "Проверьте, что зоны разрешенного пространства покрывают маршрут на высоте полета и действуют "
+        "в дату и окно работ; при необходимости измените область облета, окно работ или GSD (высоту).",
+    ],
+    "energy": [
+        "Уменьшите область облета, добавьте БВС в парк или выберите модель с большим временем полета.",
+    ],
+    "reachability": [
+        "Добавьте в обстановку резервную площадку посадки ближе к удаленной части маршрута.",
+    ],
+    "coverage": [
+        "Непокрытые участки обычно лежат в узких проходах между запретными зонами: уменьшите буфер зон "
+        "или разделите область облета.",
+    ],
+    "daylight": [
+        "Сдвиньте дату или окно работ так, чтобы вылеты укладывались в световой день.",
+    ],
+    "separation": [
+        "Расширьте окно работ, чтобы расписание могло развести вылеты по времени, или разнесите площадки "
+        "вылета бортов.",
+    ],
+}
+
+
+def _with_recommendations(
+    checks: list[SafetyCheckOut], task, plan: PlanDetail, max_agl_m: float, applied_extra_buffer_m: float
+) -> list[SafetyCheckOut]:
+    result = []
+    for check in checks:
+        if check.passed:
+            result.append(check)
+            continue
+        if check.name == "altitude":
+            recommendations = _altitude_recommendations(task, plan, max_agl_m)
+        elif check.name == "geozones":
+            recommendations = _geozone_recommendations(applied_extra_buffer_m)
+        else:
+            recommendations = list(_STATIC_RECOMMENDATIONS.get(check.name, []))
+        result.append(check.model_copy(update={"recommendations": recommendations}))
+    return result
+
+
+def _run_checks(env, task, plan: PlanDetail, applied_extra_buffer_m: float = 0.0) -> list[SafetyCheckOut]:
     airspace_feats = _valid_features(env, "airspace")
     no_fly_feats = _valid_features(env, "no_fly")
     obstacle_feats = _valid_features(env, "obstacle")
@@ -176,6 +270,7 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         AllowedZone(
             id=str(i), polygon=projector.to_utm(shape(f["geometry"])),
             height=HeightRange(float(f["properties"]["h_min"]), float(f["properties"]["h_max"])),
+            active_windows=environment_service.parse_time_windows(f["properties"].get("active_windows")),
         )
         for i, f in enumerate(airspace_feats)
     ]
@@ -183,6 +278,7 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         NoFlyZone(
             id=str(i), polygon=projector.to_utm(shape(f["geometry"])),
             safety_buffer_m=float(f["properties"].get("safety_buffer_m", 0.0)),
+            active_windows=environment_service.parse_time_windows(f["properties"].get("active_windows")),
         )
         for i, f in enumerate(no_fly_feats)
     ]
@@ -190,18 +286,21 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         Obstacle(
             id=str(i), polygon=projector.to_utm(shape(f["geometry"])),
             height=HeightRange(float(f["properties"]["h_min"]), float(f["properties"]["h_max"])),
+            safety_buffer_m=float(f["properties"].get("safety_buffer_m", 0.0)),
         )
         for i, f in enumerate(obstacle_feats)
     ]
 
-    allowed_union = unary_union([z.polygon for z in allowed_zones]) if allowed_zones else None
-    no_fly_footprints = [z.footprint() for z in no_fly_zones]
+    # Разрешенное пространство — только зоны, чей диапазон высот включает
+    # высоту полета плана (раньше объединялись все зоны без учета высоты, и
+    # полет над потолком зоны считался разрешенным).
+    height_allowed_zones = [z for z in allowed_zones if z.height.contains(plan.height_m)]
     obstacle_footprints = [o.footprint() for o in obstacles if o.is_hole_at(plan.height_m)]
     landing_points = [projector.to_utm(shape(f["geometry"])) for f in launch_feats + reserve_feats]
 
     lat, lon = area_geom.centroid.y, area_geom.centroid.x
-    window_start_hour = _time_to_hours(task.window_start) or 0.0
-    window_end_hour = _time_to_hours(task.window_end) or 24.0
+    tz = task_service.task_tzinfo(task)
+    settings = get_settings()
 
     # Пара (подпись вылета, результат): подпись нужна сообщению БЕЗ.ФТ.4.
     geozone_results: list[tuple[str | None, CheckResult]] = []
@@ -223,19 +322,33 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         if route_utm.has_z:
             altitude_sample_points_utm.extend(discretize(route_utm, DEFAULT_ALTITUDE_STEP_M))
 
+        no_fly_footprints = [
+            z.footprint() for z in no_fly_zones if z.is_active_during(sortie.start_utc, sortie.end_utc)
+        ]
         geozone_results.append(
             (label, check_geozones(route_utm, no_fly_footprints, obstacle_footprints))
         )
 
-        if allowed_union is None:
+        sortie_allowed = [
+            z.polygon for z in height_allowed_zones if z.is_active_throughout(sortie.start_utc, sortie.end_utc)
+        ]
+        if not allowed_zones:
             airspace_results.append((None, CheckResult("airspace", False, (
                 Violation(
                     "в обстановке нет ни одной зоны разрешенного воздушного пространства",
                     Point(route_utm.coords[0]),
                 ),
             ))))
+        elif not sortie_allowed:
+            airspace_results.append((label, CheckResult("airspace", False, (
+                Violation(
+                    f"на высоте {plan.height_m:.0f} м в интервале вылета не действует ни одна зона "
+                    "разрешенного воздушного пространства",
+                    Point(route_utm.coords[0]),
+                ),
+            ))))
         else:
-            airspace_results.append((label, check_allowed_space(route_utm, allowed_union)))
+            airspace_results.append((label, check_allowed_space(route_utm, unary_union(sortie_allowed))))
 
         energy_results.append(
             (label, check_energy(route_utm.length, plan.cruise_speed_mps, plan.budget_s, route=route_utm))
@@ -247,7 +360,8 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         daylight_results.append((
             label,
             check_daylight(
-                sortie.start_utc, sortie.end_utc, lat, lon, window_start_hour, window_end_hour,
+                sortie.start_utc, sortie.end_utc, lat, lon,
+                window_start=task.window_start, window_end=task.window_end, tz=tz,
                 location=Point(route_utm.coords[0]),
             ),
         ))
@@ -261,16 +375,20 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         working_area = compute_working_area(
             projector.to_utm(area_geom), allowed_zones, no_fly_zones, obstacles, plan.height_m
         )
-        coverage_result = check_coverage(all_survey_tracks_utm, working_area, plan.swath_m)
+        coverage_result = check_coverage(
+            all_survey_tracks_utm, working_area, plan.swath_m, tolerance=settings.coverage_tolerance
+        )
     except GeometryError as exc:
         coverage_result = CheckResult(
             "coverage", False, (Violation(f"не удалось пересчитать рабочую область: {exc}"),)
         )
 
-    separation_result = check_separation(sortie_tracks)
-    altitude_result = check_max_altitude(plan.height_m, agl_by_point=_agl_by_point(altitude_sample_points_utm, projector))
+    separation_result = check_separation(sortie_tracks, min_separation_m=settings.separation_distance_m)
+    agl_by_point = _agl_by_point(altitude_sample_points_utm, projector)
+    altitude_result = check_max_altitude(plan.height_m, agl_by_point=agl_by_point)
+    max_agl_m = max([plan.height_m] + [agl for _, agl in (agl_by_point or [])])
 
-    return [
+    return _with_recommendations([
         _combine("geozones", geozone_results, projector),
         _combine("airspace", airspace_results, projector),
         SafetyCheckOut(
@@ -297,7 +415,7 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
                 for i, v in enumerate(separation_result.violations)
             ],
         ),
-    ]
+    ], task, plan, max_agl_m, applied_extra_buffer_m)
 
 
 def _load_context(plan_id: str):
@@ -308,6 +426,10 @@ def _load_context(plan_id: str):
     except KeyError:
         raise SafetyCheckError("обстановка задачи не найдена — проверка невозможна")
     return plan, task, env
+
+
+def _check_passed(checks: list[SafetyCheckOut], name: str) -> bool:
+    return all(c.passed for c in checks if c.name == name)
 
 
 def _status_of(checks: list[SafetyCheckOut]) -> str:
@@ -342,15 +464,16 @@ def check_plan(plan_id: str, progress: ProgressReporter | None = None) -> Safety
     автоматических пересчетов подряд в модуле «Планирование» — без участия
     оператора, в рамках одного вызова.
 
-    v1-ограничение: автоматический пересчет здесь — это повторный вызов
-    ``plan_service.create_plan()`` без каких-либо скорректированных
-    параметров (адаптация «тип нарушения → корректировка запроса», описанная
-    в БЕЗ.ФТ.3 и концепции решения, раздел 4Г, не реализована — расчетное
-    ядро детерминировано и не принимает подсказок от проверки). На
-    неизменной задаче повтор почти всегда воспроизводит то же нарушение, и
-    три попытки, как правило, расходуются впустую. Счетчик и итоговое
-    ограничение в три попытки при этом соблюдаются честно: оператор
-    получает достоверную историю попыток, а не имитацию улучшения.
+    Корректировка запроса по типу нарушения (БЕЗ.ФТ.3, концепция, раздел
+    4Г) пока реализована для одного типа: пересечение запретных зон — каждая
+    такая попытка наращивает буфер вокруг БПЗ и препятствий на
+    ``recalc_no_fly_buffer_step_m`` и перестраивает маршрут. Для остальных
+    нарушений пересчет повторяет расчет без изменений — ядро
+    детерминировано, и повтор обычно воспроизводит то же нарушение; что
+    сделать оператору, говорят рекомендации отчета
+    (``SafetyCheckOut.recommendations``). Высоту выше потолка автопересчет не
+    исправит в принципе: ее задает GSD задачи, и рекомендация называет
+    максимально допустимое значение.
 
     ``progress`` — репортер фоновой работы. Именно он делает наблюдаемым
     третий статус БЕЗ.ФТ.5 «В процессе автоматического пересчета»: в
@@ -366,8 +489,17 @@ def check_plan(plan_id: str, progress: ProgressReporter | None = None) -> Safety
     max_recalc = get_settings().max_auto_recalc
     progress.stage("safety_check")
     checks = _run_checks(env, task, plan)
+    buffer_step_m = get_settings().recalc_no_fly_buffer_step_m
+    extra_buffer_m = 0.0
     while _status_of(checks) == "Есть нарушения" and attempts < max_recalc:
         attempts += 1
+        # БЕЗ.ФТ.3: скорректированный запрос по типу нарушения. Пересечение
+        # запретной зоны — запас вокруг БПЗ и препятствий растет на шаг с
+        # каждой такой попыткой, и маршрут перестраивается от расширенных
+        # контуров. Запас сохраняется и в следующих попытках, даже если они
+        # вызваны другим нарушением: иначе пересчет вернул бы прежний маршрут.
+        if not _check_passed(checks, "geozones"):
+            extra_buffer_m += buffer_step_m
         repositories.safety.set_attempts(task.id, task.version, attempts)
         log.info(
             "автоматический пересчет после нарушения",
@@ -377,9 +509,9 @@ def check_plan(plan_id: str, progress: ProgressReporter | None = None) -> Safety
             f"В процессе автоматического пересчета ({attempts} из {max_recalc})",
             int(40 + 50 * attempts / (max_recalc + 1)),
         )
-        new_summary = plan_service.create_plan(task.id)
+        new_summary = plan_service.create_plan(task.id, extra_no_fly_buffer_m=extra_buffer_m)
         plan = plan_service.get_plan(new_summary.id)
-        checks = _run_checks(env, task, plan)
+        checks = _run_checks(env, task, plan, applied_extra_buffer_m=extra_buffer_m)
 
     progress.stage("safety_save")
     return _store_report(original_plan_id, plan, task, checks, attempts)

@@ -216,6 +216,10 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 .sc-violations{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:5px}
 .sc-violations li{font-size:12px;color:var(--zone);background:var(--zone-soft);border-left:3px solid var(--zone);border-radius:0 6px 6px 0;padding:6px 8px;transition:opacity .15s,background-color .15s,color .15s,border-color .15s}
 .sc-violations li[data-vid]{cursor:pointer}
+.sc-recs{margin:6px 0 0;padding:6px 8px;border-left:3px solid var(--area);border-radius:0 6px 6px 0;background:var(--area-soft);font-size:12px;color:var(--ink)}
+.sc-recs p{margin:0 0 3px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
+.sc-recs ul{margin:0;padding-left:16px}
+.sc-recs li{margin:2px 0}
 .sc-violations li.hl-active{background:var(--zone-soft);border-left-color:var(--zone);color:var(--zone);box-shadow:0 0 0 1px var(--zone) inset}
 .sc-violations li.hl-dim{opacity:.4;background:var(--panel);border-left-color:var(--rule);color:var(--muted)}
 .violation-row{display:flex;align-items:flex-start;gap:7px;cursor:pointer;margin:0}
@@ -1299,8 +1303,8 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       field("Дата работ", '<input type="date" name="work_date" required value="' + todayDateStr() + '">') +
       "</div>";
     html += '<div class="row2">' +
-      field("Окно работ, с", '<input type="time" name="window_start">') +
-      field("Окно работ, по", '<input type="time" name="window_end">') +
+      field("Окно работ, с (" + escapeHtml(browserTimeZone() || "UTC") + ")", '<input type="time" name="window_start">') +
+      field("Окно работ, по (" + escapeHtml(browserTimeZone() || "UTC") + ")", '<input type="time" name="window_end">') +
       "</div>";
     html += '<div class="row2">' +
       field("Скорость ветра, м/с", '<input type="number" step="0.1" min="0" name="wind_speed_ms">') +
@@ -1365,6 +1369,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     fd.delete("area_mode");
     fd.append("environment_id", newTaskSelection.environmentId);
     fd.append("fleet_id", newTaskSelection.fleetId);
+    if (browserTimeZone()) fd.set("timezone", browserTimeZone());
     if (fd.get("criterion_mode") !== "Компромисс") fd.delete("criterion_alpha");
     ["wind_speed_ms", "cloud_cover_pct", "window_start", "window_end"].forEach(function (name) {
       if (fd.get(name) === "") fd.delete(name);
@@ -1510,8 +1515,8 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       field("Дата работ", '<input type="date" name="work_date" required value="' + (t ? t.work_date : todayDateStr()) + '">') +
       "</div>";
     html += '<div class="row2">' +
-      field("Окно работ, с", '<input type="time" name="window_start" value="' + (t && t.window_start ? t.window_start.slice(0, 5) : "") + '">') +
-      field("Окно работ, по", '<input type="time" name="window_end" value="' + (t && t.window_end ? t.window_end.slice(0, 5) : "") + '">') +
+      field("Окно работ, с (" + escapeHtml((t && t.timezone) || browserTimeZone() || "UTC") + ")", '<input type="time" name="window_start" value="' + (t && t.window_start ? t.window_start.slice(0, 5) : "") + '">') +
+      field("Окно работ, по (" + escapeHtml((t && t.timezone) || browserTimeZone() || "UTC") + ")", '<input type="time" name="window_end" value="' + (t && t.window_end ? t.window_end.slice(0, 5) : "") + '">') +
       "</div>";
     html += '<div class="row2">' +
       field("Скорость ветра, м/с", '<input type="number" step="0.1" min="0" name="wind_speed_ms" value="' + (t && t.wind_speed_ms != null ? t.wind_speed_ms : "") + '">') +
@@ -1610,6 +1615,9 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     var fd = new FormData(form);
     fd.delete("area_mode");
     fd.append("environment_id", currentEnvironment.id);
+    // При правке пояс задачи сохраняется: окно уже введено в нем.
+    var taskTz = (existingTask && existingTask.timezone) || browserTimeZone();
+    if (taskTz) fd.set("timezone", taskTz);
     if (fd.get("criterion_mode") !== "Компромисс") fd.delete("criterion_alpha");
     ["wind_speed_ms", "cloud_cover_pct", "window_start", "window_end"].forEach(function (name) {
       if (fd.get(name) === "") fd.delete(name);
@@ -1696,7 +1704,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     html += "<dt>Тип съемки</dt><dd>" + escapeHtml(task.survey_type) + "</dd>";
     html += "<dt>GSD</dt><dd>" + task.gsd_cm + " см</dd>";
     html += "<dt>Дата работ</dt><dd>" + task.work_date + "</dd>";
-    html += "<dt>Окно работ</dt><dd>" + (task.window_start ? task.window_start.slice(0, 5) : "—") + "–" + (task.window_end ? task.window_end.slice(0, 5) : "—") + "</dd>";
+    html += "<dt>Окно работ</dt><dd>" + (task.window_start ? task.window_start.slice(0, 5) : "—") + "–" + (task.window_end ? task.window_end.slice(0, 5) : "—") + " (" + escapeHtml(task.timezone || "UTC") + ")</dd>";
     html += "<dt>Ветер</dt><dd>" + (task.wind_speed_ms != null ? task.wind_speed_ms + " м/с" : "—") + "</dd>";
     html += "<dt>Критерий</dt><dd>" + task.criterion_mode + (task.criterion_mode === "Компромисс" ? " (α=" + task.criterion_alpha + ")" : "") + "</dd>";
     html += "</dl>";
@@ -1758,6 +1766,12 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     if (h > 0 || m > 0) parts.push(m + "м");
     parts.push(sec + "с");
     return parts.join(" ");
+  }
+
+  // Пояс окна работ: окно задается в местном времени оператора, и сервер
+  // должен знать, в каком (раньше время молча понималось как UTC).
+  function browserTimeZone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { return ""; }
   }
 
   function formatUtc(iso) {
@@ -2233,6 +2247,12 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
             "<span>" + escapeHtml(v.message) + "</span>" +
             "</label></li>";
         }).join("") + "</ul>";
+      }
+      if (!c.passed && c.recommendations && c.recommendations.length) {
+        // БЕЗ.ФТ.4: предлагаемые варианты решения
+        html += '<div class="sc-recs"><p>Как исправить</p><ul>' + c.recommendations.map(function (r) {
+          return "<li>" + escapeHtml(r) + "</li>";
+        }).join("") + "</ul></div>";
       }
       html += "</li>";
     });

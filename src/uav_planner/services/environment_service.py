@@ -34,11 +34,21 @@ POINT_LAYERS = ("launch_site", "reserve_site")
 
 
 
-def _parse_time_windows(raw: Any) -> list[TimeWindow] | None:
+def _aware_utc(moment: datetime) -> datetime:
+    return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment
+
+
+def parse_time_windows(raw: Any) -> list[TimeWindow] | None:
+    """Интервалы действия зоны из ``properties.active_windows`` (ISO 8601).
+    Время без пояса понимается как UTC — иначе сравнение с временем вылетов
+    (всегда aware UTC) упало бы на сравнении naive и aware."""
     if not raw:
         return None
     return [
-        TimeWindow(start=datetime.fromisoformat(w["start"]), end=datetime.fromisoformat(w["end"]))
+        TimeWindow(
+            start=_aware_utc(datetime.fromisoformat(w["start"])),
+            end=_aware_utc(datetime.fromisoformat(w["end"])),
+        )
         for w in raw
     ]
 
@@ -77,7 +87,7 @@ def _validate_polygon_feature(layer: str, feature: dict) -> BaseGeometry:
             if field not in props:
                 raise ValueError(f"отсутствует обязательное поле '{field}' (диапазон высот)")
         HeightRange(float(props["h_min"]), float(props["h_max"]))
-    _parse_time_windows(props.get("active_windows"))
+    parse_time_windows(props.get("active_windows"))
     return geom
 
 

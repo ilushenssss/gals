@@ -55,6 +55,7 @@ async def create_task(
     work_date: date = Form(...),
     window_start: str | None = Form(None),
     window_end: str | None = Form(None),
+    timezone: str | None = Form(None),
     wind_speed_ms: float | None = Form(None),
     cloud_cover_pct: float | None = Form(None),
     criterion_mode: str = Form(...),
@@ -67,6 +68,7 @@ async def create_task(
         return task_service.create_task(
             name=name, environment_id=environment_id, fleet_id=fleet_id, survey_type=survey_type, gsd_cm=gsd_cm,
             work_date=work_date, window_start=_parse_time(window_start), window_end=_parse_time(window_end),
+            tz_name=timezone or None,
             wind_speed_ms=wind_speed_ms, cloud_cover_pct=cloud_cover_pct, criterion_mode=criterion_mode,
             criterion_alpha=criterion_alpha, area_geojson=area_geojson, user=user,
         )
@@ -84,6 +86,7 @@ async def update_task(
     work_date: date = Form(...),
     window_start: str | None = Form(None),
     window_end: str | None = Form(None),
+    timezone: str | None = Form(None),
     wind_speed_ms: float | None = Form(None),
     cloud_cover_pct: float | None = Form(None),
     criterion_mode: str = Form(...),
@@ -96,6 +99,7 @@ async def update_task(
         return task_service.update_task(
             task_id, expected_version, name=name, survey_type=survey_type, gsd_cm=gsd_cm,
             work_date=work_date, window_start=_parse_time(window_start), window_end=_parse_time(window_end),
+            tz_name=timezone or None,
             wind_speed_ms=wind_speed_ms, cloud_cover_pct=cloud_cover_pct, criterion_mode=criterion_mode,
             criterion_alpha=criterion_alpha, area_geojson=area_geojson, user=user,
         )

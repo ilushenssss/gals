@@ -1,5 +1,6 @@
 import pytest
 from shapely.geometry import MultiPolygon, Polygon, box
+from shapely.ops import unary_union
 
 from uav_planner.coverage import boustrophedon_cells
 
@@ -68,3 +69,24 @@ def test_min_cell_area_filters_tiny_slivers():
     cells_strict = boustrophedon_cells(area, min_cell_area_m2=1e6)
 
     assert len(cells_strict) <= len(cells_default)
+
+
+def test_safe_union_refuses_point_touching_pieces():
+    # Регрессия: касание в точке дает MultiPolygon — раньше бралась
+    # наибольшая часть, и вторая молча выпадала из декомпозиции.
+    from uav_planner.coverage.cells import _safe_union
+
+    assert _safe_union(box(0, 0, 1, 1), box(1, 1, 2, 2)) is None
+    merged = _safe_union(box(0, 0, 1, 1), box(0, 1, 1, 2))
+    assert merged is not None and merged.area == pytest.approx(2.0)
+
+
+def test_decomposition_preserves_total_area_with_holes():
+    # ⋃Cᵢ = W: сумма площадей ячеек равна площади области (с дырами и
+    # вогнутостью), ничего не теряется и не перекрывается.
+    outer = Polygon([(0, 0), (400, 0), (400, 300), (250, 300), (250, 150), (150, 150), (150, 300), (0, 300)])
+    area = outer.difference(box(40, 40, 90, 90)).difference(box(300, 60, 360, 240))
+    cells = boustrophedon_cells(area)
+    assert cells
+    assert sum(c.polygon.area for c in cells) == pytest.approx(area.area, rel=1e-6)
+    assert unary_union([c.polygon for c in cells]).symmetric_difference(area).area < 1e-3

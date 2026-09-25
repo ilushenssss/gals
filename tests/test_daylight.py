@@ -41,3 +41,36 @@ def test_polar_night_returns_none():
 
 def test_polar_day_returns_full_day():
     assert daylight_window_utc_hours(78.0, 15.0, date(2026, 6, 21)) == (0.0, 24.0)
+
+
+# ---------- work_window_utc: окно работ в абсолютном времени ----------
+
+from datetime import datetime, time, timezone  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+from uav_planner.schedule import work_window_utc  # noqa: E402
+
+
+def test_work_window_polar_day_is_whole_local_day():
+    oslo = ZoneInfo("Europe/Oslo")
+    start, end = work_window_utc(78.0, 15.0, date(2026, 6, 21), tz=oslo)
+    assert start == datetime(2026, 6, 21, 0, 0, tzinfo=oslo)
+    assert end == datetime(2026, 6, 22, 0, 0, tzinfo=oslo)
+
+
+def test_work_window_empty_when_operator_window_misses_daylight():
+    msk = ZoneInfo("Europe/Moscow")
+    # Зимой в Москве светло ≈08:58–15:58 МСК — окно 18:00–20:00 пусто.
+    assert work_window_utc(55.75, 37.60, date(2026, 12, 21), time(18), time(20), msk) is None
+
+
+def test_work_window_uses_local_day_for_zone_far_from_solar_time():
+    # Самоа (UTC+13) на долготе −172: истинный полдень местного 21 июня —
+    # это 20 июня по UTC. Световой день должен относиться к местному дню,
+    # а не к UTC-суткам с тем же числом.
+    apia = ZoneInfo("Pacific/Apia")
+    start, end = work_window_utc(-13.8, -171.8, date(2026, 6, 21), tz=apia)
+    assert start.astimezone(apia).date() == date(2026, 6, 21)
+    assert end.astimezone(apia).date() == date(2026, 6, 21)
+    assert 6 <= start.astimezone(apia).hour <= 7 and 17 <= end.astimezone(apia).hour <= 18
+    assert start.tzinfo == timezone.utc

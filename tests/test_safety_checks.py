@@ -1,4 +1,5 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from shapely.geometry import LineString, Point, box
@@ -205,6 +206,30 @@ def test_daylight_fails_on_polar_night():
     assert "полярная ночь" in result.violations[0].message
 
 
+def test_daylight_accepts_eastern_morning_in_previous_utc_day():
+    # Регрессия: Владивосток, 06:00 местного 21 июня = 20:00 UTC 20 июня.
+    # Раньше световой день обрезался по UTC-суткам, и такой вылет ложно
+    # признавался ночным.
+    vvo = ZoneInfo("Asia/Vladivostok")
+    start = datetime(2026, 6, 21, 6, 0, tzinfo=vvo).astimezone(timezone.utc)
+    end = start + timedelta(hours=1)
+    assert check_daylight(start, end, lat=43.1, lon=131.9, tz=vvo).passed
+    # Та же проверка без пояса (задача, созданная до поля timezone) —
+    # соседние сутки тоже рассматриваются.
+    assert check_daylight(start, end, lat=43.1, lon=131.9).passed
+
+
+def test_daylight_operator_window_is_local_time():
+    msk = ZoneInfo("Europe/Moscow")
+    inside = datetime(2026, 6, 21, 9, 30, tzinfo=msk).astimezone(timezone.utc)
+    outside = datetime(2026, 6, 21, 19, 0, tzinfo=msk).astimezone(timezone.utc)
+    kwargs = dict(lat=55.75, lon=37.60, window_start=time(9), window_end=time(18), tz=msk)
+    assert check_daylight(inside, inside + timedelta(hours=1), **kwargs).passed
+    result = check_daylight(outside, outside + timedelta(hours=1), **kwargs)
+    assert not result.passed
+    assert "светового дня" in result.violations[0].message
+
+
 # ---------- check_separation ----------
 
 def test_separation_passes_when_far_apart():
@@ -247,3 +272,45 @@ def test_separation_ignores_same_vehicle_pairs():
     ]
     result = check_separation(sorties, min_separation_m=50)
     assert result.passed
+
+
+def test_separation_catches_head_on_pass_between_old_30s_samples():
+    # Регрессия: встречные борта по 20 м/с на одной линии. Старая проверка
+    # сравнивала положения раз в 30 с (t=0: 2000 м, t=30: 400 м, t=60:
+    # 400 м) и сближение до 0 м на t=50 с пропускала.
+    t0 = datetime(2026, 6, 15, 8, 0, tzinfo=timezone.utc)
+    sorties = [
+        SortieTrack("A", LineString([(0, 0), (2000, 0)]), t0, t0 + timedelta(seconds=100), cruise_speed_mps=20),
+        SortieTrack("B", LineString([(2000, 0), (0, 0)]), t0, t0 + timedelta(seconds=100), cruise_speed_mps=20),
+    ]
+    result = check_separation(sorties, min_separation_m=50)
+    assert not result.passed
+    message = result.violations[0].message
+    assert "до 0 м" in message and "08:00:50" in message
+    assert result.violations[0].point.distance(Point(1000, 0)) < 1e-6
+
+
+def test_separation_closest_approach_between_vertices_is_exact():
+    # Параллельные встречные галсы в 60 м друг от друга: минимум (60 м)
+    # достигается между вершинами — порог 50 м не нарушен, порог 70 м — да.
+    t0 = datetime(2026, 6, 15, 8, 0, tzinfo=timezone.utc)
+    sorties = [
+        SortieTrack("A", LineString([(0, 0), (1000, 0)]), t0, t0 + timedelta(seconds=100), cruise_speed_mps=10),
+        SortieTrack("B", LineString([(1000, 60), (0, 60)]), t0, t0 + timedelta(seconds=100), cruise_speed_mps=10),
+    ]
+    assert check_separation(sorties, min_separation_m=50).passed
+    result = check_separation(sorties, min_separation_m=70)
+    assert not result.passed
+    assert "до 60 м" in result.violations[0].message
+
+
+def test_separation_accounts_for_staggered_start():
+    # Второй борт стартует с той же точки на 60 с позже по тому же маршруту —
+    # всё время держится в 600 м позади первого.
+    t0 = datetime(2026, 6, 15, 8, 0, tzinfo=timezone.utc)
+    route = LineString([(0, 0), (3000, 0)])
+    sorties = [
+        SortieTrack("A", route, t0, t0 + timedelta(seconds=300), cruise_speed_mps=10),
+        SortieTrack("B", route, t0 + timedelta(seconds=60), t0 + timedelta(seconds=360), cruise_speed_mps=10),
+    ]
+    assert check_separation(sorties, min_separation_m=50).passed

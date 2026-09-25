@@ -1,6 +1,7 @@
-"""Независимая проверка безопасности готового плана — семь критериев из
+"""Независимая проверка безопасности готового плана — восемь критериев: семь из
 Таблицы 1 docs/trebovania/Проверка_безопасности.md (БЕЗ.ФТ.2), формально
-описанных в Математическая_модель.md, раздел 15.
+описанных в Математическая_модель.md, раздел 15, и потолок высоты полета
+(``check_max_altitude``).
 
 Каждая функция — чистая геометрическая/временная проверка результата
 (маршрутов, расписания, заявленных параметров съемки), а не внутренних
@@ -10,21 +11,21 @@
 
 from __future__ import annotations
 
+import bisect
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, tzinfo
 
 from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from uav_planner.camera import DEFAULT_MAX_ALTITUDE_M
-from uav_planner.schedule import daylight_window_utc_hours
+from uav_planner.schedule import work_window_utc
 
 DEFAULT_STEP_M = 20.0
 DEFAULT_COVERAGE_TOLERANCE = 0.01
 DEFAULT_MIN_SEPARATION_M = 50.0
-DEFAULT_SEPARATION_TIME_STEP_S = 30.0
 # DEFAULT_MAX_ALTITUDE_M — единственный источник в uav_planner.camera.optics
 # (там же теперь и ограничивается на этапе расчета геометрии съемки по GSD,
 # по запросу пользователя); здесь просто переиспользуем то же число для
@@ -249,71 +250,140 @@ def check_daylight(
     end_utc: datetime,
     lat: float,
     lon: float,
-    window_start_hour: float = 0.0,
-    window_end_hour: float = 24.0,
+    window_start: time | None = None,
+    window_end: time | None = None,
+    tz: tzinfo | None = None,
     location: Point | None = None,
 ) -> CheckResult:
-    """Вылет укладывается в световой день для даты и координат задачи.
-    ``location`` — опционально, точка вылета в UTM, только для отметки на
-    карте (нарушение здесь привязано ко всему вылету, а не к точке маршрута)."""
-    window = daylight_window_utc_hours(lat, lon, start_utc.date())
-    if window is None:
+    """Вылет укладывается в действующее окно работ (окно оператора в местном
+    времени ``tz`` ∩ световой день) одного из местных дней, на которые
+    приходится вылет. Окно считает та же ``schedule.work_window_utc``, что и
+    расписание: формула светового дня одна, а независимость проверки — в
+    том, что сверяется уже готовое время вылета, а не повторяется расчет
+    расписания. ``location`` — опционально, точка вылета в UTM, только для
+    отметки на карте (нарушение привязано ко всему вылету)."""
+    local_day = start_utc.astimezone(tz).date() if tz is not None else start_utc.date()
+    # Соседние дни — на случай, когда пояс задачи далек от «солнечного» (UTC
+    # для старых задач на восточных долготах): световой день местного дня D
+    # начинается тогда в UTC-сутках D−1.
+    windows = [
+        w for w in (
+            work_window_utc(lat, lon, local_day + timedelta(days=shift), window_start, window_end, tz)
+            for shift in (-1, 0, 1)
+        )
+        if w is not None
+    ]
+    if not windows:
         return CheckResult("daylight", False, (
-            Violation("полярная ночь на дату вылета — светового дня нет", location),
+            Violation("на дату вылета нет рабочих часов — полярная ночь или окно работ вне светового дня", location),
         ))
+    if any(win_start <= start_utc and end_utc <= win_end for win_start, win_end in windows):
+        return CheckResult("daylight", True)
 
-    day_start_h = max(window_start_hour, window[0])
-    day_end_h = min(window_end_hour, window[1])
-    base = datetime(start_utc.year, start_utc.month, start_utc.day, tzinfo=timezone.utc)
-    win_start = base + timedelta(hours=day_start_h)
-    win_end = base + timedelta(hours=day_end_h)
-
-    if start_utc < win_start or end_utc > win_end:
-        return CheckResult("daylight", False, (
-            Violation(
-                f"вылет {start_utc.isoformat()}–{end_utc.isoformat()} выходит за пределы "
-                f"светового дня {win_start.isoformat()}–{win_end.isoformat()}",
-                location,
-            ),
-        ))
-    return CheckResult("daylight", True)
+    nearest_start, nearest_end = min(windows, key=lambda w: abs((w[0] - start_utc).total_seconds()))
+    return CheckResult("daylight", False, (
+        Violation(
+            f"вылет {start_utc.isoformat()}–{end_utc.isoformat()} выходит за пределы "
+            f"светового дня {nearest_start.isoformat()}–{nearest_end.isoformat()}",
+            location,
+        ),
+    ))
 
 
-def _position_at(route: BaseGeometry, elapsed_s: float, cruise_speed_mps: float) -> Point:
-    distance_m = min(max(elapsed_s, 0.0) * cruise_speed_mps, route.length)
-    return route.interpolate(distance_m)
+def _vertex_times(track: SortieTrack) -> list[tuple[float, tuple[float, float]]]:
+    """Моменты прохода вершин маршрута (секунды от начала вылета) при
+    постоянной крейсерской скорости — та же модель движения, что у
+    расписания (``plan_service``: длительность этапа = длина / скорость)."""
+    coords = [(c[0], c[1]) for c in track.route.coords]
+    result = [(0.0, coords[0])]
+    travelled = 0.0
+    for a, b in zip(coords, coords[1:]):
+        travelled += math.hypot(b[0] - a[0], b[1] - a[1])
+        result.append((travelled / track.cruise_speed_mps, b))
+    return result
+
+
+def _position(vertices: list[tuple[float, tuple[float, float]]], times: list[float], t: float) -> tuple[float, float]:
+    """Положение борта в момент ``t`` секунд от начала вылета (до начала — в
+    первой точке, после конца маршрута — в последней). ``times`` — моменты
+    вершин из ``vertices``, для бинарного поиска отрезка."""
+    if t <= times[0]:
+        return vertices[0][1]
+    if t >= times[-1]:
+        return vertices[-1][1]
+    i = bisect.bisect_right(times, t)
+    (t0, p0), (t1, p1) = vertices[i - 1], vertices[i]
+    k = (t - t0) / (t1 - t0) if t1 > t0 else 1.0
+    return (p0[0] + (p1[0] - p0[0]) * k, p0[1] + (p1[1] - p0[1]) * k)
+
+
+def _closest_approach(a: SortieTrack, b: SortieTrack) -> tuple[float, datetime, Point] | None:
+    """Точный минимум расстояния между двумя бортами на общем интервале
+    времени: ``(расстояние, момент, середина отрезка между бортами)``.
+
+    Оба маршрута — ломаные, пройденные с постоянной скоростью, поэтому между
+    соседними «изломами» (моментами прохода вершин любого из двух маршрутов)
+    вектор между бортами меняется линейно, и минимум его длины на таком
+    отрезке времени находится в закрытой форме. Раньше расстояние
+    сравнивалось раз в 30 с — при встречном движении 2×20 м/с это отсчеты
+    через 1200 м, и сближение ближе порога между ними проходило незамеченным.
+    """
+    overlap_start = max(a.start_utc, b.start_utc)
+    overlap_end = min(a.end_utc, b.end_utc)
+    if overlap_start >= overlap_end:
+        return None
+
+    va, vb = _vertex_times(a), _vertex_times(b)
+    ta, tb = [t for t, _ in va], [t for t, _ in vb]
+    span_s = (overlap_end - overlap_start).total_seconds()
+    offset_a = (overlap_start - a.start_utc).total_seconds()
+    offset_b = (overlap_start - b.start_utc).total_seconds()
+    breaks = {0.0, span_s}
+    breaks.update(t - offset_a for t, _ in va if 0.0 < t - offset_a < span_s)
+    breaks.update(t - offset_b for t, _ in vb if 0.0 < t - offset_b < span_s)
+    times = sorted(breaks)
+
+    best: tuple[float, float, tuple[float, float], tuple[float, float]] | None = None
+    for t0, t1 in zip(times, times[1:]):
+        pa0, pa1 = _position(va, ta, t0 + offset_a), _position(va, ta, t1 + offset_a)
+        pb0, pb1 = _position(vb, tb, t0 + offset_b), _position(vb, tb, t1 + offset_b)
+        r0 = (pb0[0] - pa0[0], pb0[1] - pa0[1])
+        dr = ((pb1[0] - pa1[0]) - r0[0], (pb1[1] - pa1[1]) - r0[1])
+        dr2 = dr[0] ** 2 + dr[1] ** 2
+        k = 0.0 if dr2 == 0 else min(max(-(r0[0] * dr[0] + r0[1] * dr[1]) / dr2, 0.0), 1.0)
+        distance = math.hypot(r0[0] + dr[0] * k, r0[1] + dr[1] * k)
+        if best is None or distance < best[0]:
+            pa = (pa0[0] + (pa1[0] - pa0[0]) * k, pa0[1] + (pa1[1] - pa0[1]) * k)
+            pb = (pb0[0] + (pb1[0] - pb0[0]) * k, pb0[1] + (pb1[1] - pb0[1]) * k)
+            best = (distance, t0 + (t1 - t0) * k, pa, pb)
+
+    distance, t, pa, pb = best
+    midpoint = Point((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2)
+    return distance, overlap_start + timedelta(seconds=t), midpoint
 
 
 def check_separation(
     sorties: list[SortieTrack],
     min_separation_m: float = DEFAULT_MIN_SEPARATION_M,
-    time_step_s: float = DEFAULT_SEPARATION_TIME_STEP_S,
 ) -> CheckResult:
     """Нет сближений разных БВС на одной высоте (в v1 — единой для всего
-    плана) ближе ``min_separation_m`` в перекрывающиеся по времени интервалы."""
+    плана) ближе ``min_separation_m`` в перекрывающиеся по времени интервалы.
+    Для каждой пары вылетов ищется точный момент наибольшего сближения (см.
+    ``_closest_approach``), а не выборка по времени."""
     violations: list[Violation] = []
     for i in range(len(sorties)):
         for j in range(i + 1, len(sorties)):
             a, b = sorties[i], sorties[j]
             if a.uav_id == b.uav_id:
                 continue
-            overlap_start = max(a.start_utc, b.start_utc)
-            overlap_end = min(a.end_utc, b.end_utc)
-            if overlap_start >= overlap_end:
+            approach = _closest_approach(a, b)
+            if approach is None:
                 continue
-
-            t = overlap_start
-            while t <= overlap_end:
-                pa = _position_at(a.route, (t - a.start_utc).total_seconds(), a.cruise_speed_mps)
-                pb = _position_at(b.route, (t - b.start_utc).total_seconds(), b.cruise_speed_mps)
-                distance = pa.distance(pb)
-                if distance < min_separation_m:
-                    midpoint = Point((pa.x + pb.x) / 2, (pa.y + pb.y) / 2)
-                    violations.append(Violation(
-                        f"{a.uav_id} и {b.uav_id} сближаются до {distance:.0f} м "
-                        f"(порог {min_separation_m:.0f} м) около {t.isoformat()}",
-                        midpoint,
-                    ))
-                    break
-                t += timedelta(seconds=time_step_s)
+            distance, moment, midpoint = approach
+            if distance < min_separation_m:
+                violations.append(Violation(
+                    f"{a.uav_id} и {b.uav_id} сближаются до {distance:.0f} м "
+                    f"(порог {min_separation_m:.0f} м) около {moment.isoformat()}",
+                    midpoint,
+                ))
     return _finalize("separation", violations)

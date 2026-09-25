@@ -87,6 +87,8 @@ class SafetyCheck(Base):
     # Объекты ViolationOut (id/message/lat/lon/ignored), а не строки: структуру
     # задаёт схема API и она будет меняться, поэтому jsonb без миграции типа.
     violations: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    # БЕЗ.ФТ.4: предлагаемые варианты решения (строки) — см. SafetyCheckOut.
+    recommendations: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
 
     report: Mapped[SafetyReport] = relationship(back_populates="checks")
 

@@ -19,6 +19,9 @@ def test_generate_tracks_stay_within_polygon():
     cell = Cell(polygon=polygon, direction_deg=0.0)
     tracks = generate_tracks(cell, spacing_m=7.0)
 
+    # 40 м поперек при шаге 7 м — ⌈40/7⌉ = 6 галсов; без этой проверки пустой
+    # результат проходил бы тест.
+    assert len(tracks) == 6
     envelope = polygon.buffer(1e-6)
     for t in tracks:
         assert envelope.contains(t)

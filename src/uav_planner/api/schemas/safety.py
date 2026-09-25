@@ -36,6 +36,10 @@ class SafetyCheckOut(BaseModel):
     label: str
     passed: bool
     violations: list[ViolationOut] = []
+    # БЕЗ.ФТ.4: «предлагаемые варианты решения» — что сделать оператору (или
+    # что уже сделал автопересчет) при нарушении этого критерия. Пусто, если
+    # критерий пройден.
+    recommendations: list[str] = []
 
 
 class SafetyReport(BaseModel):

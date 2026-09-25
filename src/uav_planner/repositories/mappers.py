@@ -213,7 +213,7 @@ def fleet_from_row(row: FleetUpload) -> FleetDetail:
 
 
 TASK_COLUMNS = (
-    "name", "survey_type", "gsd_cm", "work_date", "window_start", "window_end",
+    "name", "survey_type", "gsd_cm", "work_date", "window_start", "window_end", "timezone",
     "wind_speed_ms", "cloud_cover_pct", "criterion_mode", "criterion_alpha",
     "status", "version", "daylight_warning", "created_at", "updated_at",
 )
@@ -251,6 +251,7 @@ def task_from_row(row: Task) -> TaskDetail:
         gsd_cm=row.gsd_cm,
         window_start=row.window_start,
         window_end=row.window_end,
+        timezone=row.timezone,
         wind_speed_ms=row.wind_speed_ms,
         cloud_cover_pct=row.cloud_cover_pct,
         criterion_mode=row.criterion_mode,
@@ -374,6 +375,7 @@ def safety_report_to_rows(report: SafetyReport, requested_plan_id: str) -> Safet
                 label=check.label,
                 passed=check.passed,
                 violations=[v.model_dump(mode="json") for v in check.violations],
+                recommendations=list(check.recommendations),
             )
         )
     return row
@@ -386,6 +388,7 @@ def safety_report_from_row(row: SafetyReportRow) -> SafetyReport:
             label=c.label,
             passed=c.passed,
             violations=[ViolationOut(**v) for v in (c.violations or [])],
+            recommendations=list(c.recommendations or []),
         )
         for c in sorted(row.checks, key=lambda c: c.ordinal)
     ]
