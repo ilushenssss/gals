@@ -92,4 +92,4 @@
 ## Снятие vanilla
 
 - [x] 57. Все пункты выше `[x]`
-- [ ] 58. `GALS_SERVE_STATIC=false` / удаление `api/static/`, правка `api/app.py`, README, compose
+- [x] 58. Удаление `api/static/`, правка `api/app.py`, pyproject, README, compose

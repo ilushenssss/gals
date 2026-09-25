@@ -193,11 +193,10 @@ def test_get_unknown_environment_returns_404(client):
     assert resp.status_code == 404
 
 
-def test_frontend_index_is_served(client):
-    """По решению пользователя при переносе продуктового стека из
-    merge-core-into-wrapper обратно в main React-SPA не перенесена — этот же
-    процесс снова отдает vanilla-JS фронтенд первой версии интерфейса
-    (см. api/app.py), как было до переноса."""
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert "Галс" in resp.text
+def test_api_process_does_not_serve_the_frontend(client):
+    """Фронтенд раздает nginx в контейнере `web`, а не этот процесс.
+
+    Если корень снова начнет отдавать HTML, значит в образ API опять попала
+    статика прежнего vanilla-интерфейса (снят 25.09.2026).
+    """
+    assert client.get("/").status_code == 404

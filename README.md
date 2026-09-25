@@ -70,17 +70,17 @@
   - `db` (PostGIS);
   - `redis`;
   - одноразовый `migrate` (`alembic upgrade head`);
-  - `api` — HTTP API, порт `API_PORT` (по умолчанию 8000), healthcheck по `/api/health`;
-    пока отдает и прежний vanilla-интерфейс `static/index.html` (см. ниже);
+  - `api` — только HTTP API, порт `API_PORT` (по умолчанию 8000), healthcheck по
+    `/api/health`; фронтенд этот процесс не отдает (на `/` — 404);
   - `worker` — фоновый расчет;
   - `beat` — janitor;
   - `web` — React-SPA (`web/`, React + TypeScript + Vite, сборка за nginx), порт `WEB_PORT`
     (по умолчанию 8080); nginx проксирует `/api` на `api`, origin один, CORS не нужен.
 
   SPA возвращена из ветки `merge-core-into-wrapper` 25.09.2026 вместе с редизайном
-  интерфейса (макеты — артефакт «Галс — дизайн интерфейса»). Пока чек-лист паритета
-  `web/PARITY.md` не закрыт, vanilla-интерфейс на `API_PORT` остается эталоном для сверки;
-  после закрытия он снимается.
+  интерфейса (макеты — артефакт «Галс — дизайн интерфейса»). Прежний vanilla-интерфейс
+  (`api/static/index.html`) снят в тот же день, после закрытия чек-листа паритета
+  `web/PARITY.md` — каждый пункт проверен в браузере на живом стеке.
 
 ### HTTP API
 
@@ -123,9 +123,11 @@ src/uav_planner/
   db/, models/, repositories/   # хранилище
   services/    # оркестрация модулей
   jobs/        # Celery: расчет, проверка, прогресс, отмена, janitor
-  api/         # app.py, middleware.py, deps.py, schemas/, routers/, static/ (фронтенд)
+  api/         # app.py, middleware.py, deps.py, schemas/, routers/
   config.py, logging_setup.py
 tests/
+web/           # React-SPA: src/ (экраны, дизайн-система, карта), PARITY.md, openapi.json
+scripts/       # dump_openapi.py — схема для типов фронтенда
 ```
 
 ## Запуск
@@ -152,9 +154,8 @@ python -m venv .venv
 docker compose up --build            # если 8000 занят: API_PORT=8099 DB_PORT=55433 docker compose up --build
 ```
 
-Открыть `http://127.0.0.1:8080/` — SPA (`WEB_PORT`); прежний интерфейс, пока он не снят, —
-`http://127.0.0.1:8000/` (`API_PORT`). Разработка SPA с горячей перезагрузкой — поверх
-поднятого API:
+Открыть `http://127.0.0.1:8080/` — SPA (`WEB_PORT`); `API_PORT` (8000) отдает только API
+и `/docs`. Разработка SPA с горячей перезагрузкой — поверх поднятого API:
 
 ```bash
 cd web && npm ci
@@ -188,9 +189,8 @@ export GALS_DATABASE_URL=postgresql+psycopg://gals:gals@127.0.0.1:55432/gals
 `--reload` перезапускался бы на старую копию пакета из site-packages образа: правка тихо не
 долетала бы до работающего кода.
 
-Логотип лежит в `img/logo.png`, уменьшенная копия для шапки — в
-`src/uav_planner/api/static/img/logo.png`. Он светлый, поэтому в шапке стоит на плашке
-фиксированного темного цвета (`--brand-chip`).
+Логотип лежит в `img/logo.png`; в SPA — векторная иконка в шапке и `web/public/logo.svg`
+(favicon).
 
 Тестовые сцены для загрузки — `examples/`:
 - `scene_valid.geojson` — корректная обстановка под Москвой: 2 ВПП, резервная площадка,
@@ -214,7 +214,9 @@ export GALS_DATABASE_URL=postgresql+psycopg://gals:gals@127.0.0.1:55432/gals
 
 > Разделы ниже писались по мере реализации модулей. Они описывают бизнес-логику и
 > формулы; хранилище везде — PostgreSQL через `repositories/`. Файлы названы по текущей
-> раскладке: `api/schemas/*`, `api/routers/*`, `services/*`.
+> раскладке: `api/schemas/*`, `api/routers/*`, `services/*`. Описания экранов в
+> `static/index.html` относятся к прежнему vanilla-интерфейсу, снятому 25.09.2026: его
+> функции перенесены в SPA (`web/src/features/*`), соответствие — `web/PARITY.md`.
 
 ### `uav_planner.geometry` — проекция и рабочая область
 
@@ -1208,5 +1210,6 @@ HTTP-запросом (обстановка с двумя ВПП и БПЗ на 
 - обходное, а не прямолинейное расстояние до ближайшей площадки в `check_reachability`;
 - разнесение по высоте (ε_h).
 
-Не сделано по интерфейсу: ЗАД.ФТ.7 (поиск и фильтр над списком задач); тестов фронтенда
-(`static/index.html`) нет.
+Не сделано по интерфейсу: автотестов фронтенда нет — первый кандидат — Playwright-смоук
+по сценарию `web/PARITY.md` (загрузка → задача → расчет с отменой → проверка →
+подтверждение → экспорт).

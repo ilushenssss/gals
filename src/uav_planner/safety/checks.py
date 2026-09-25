@@ -44,8 +44,8 @@ _VIOLATION_LIMIT = 5
 class Violation:
     """Одно нарушение — текст причины и, где это осмысленно, точка на карте
     («опасный момент», в метрах UTM), чтобы интерфейс мог показать ее на
-    карте и подсветить именно эту строку при наведении (см. static/index.html,
-    Экран 5)."""
+    карте и подсветить именно эту строку при наведении (см.
+    web/src/features/safety/ViolationMarkers.tsx)."""
 
     message: str
     point: Point | None = None

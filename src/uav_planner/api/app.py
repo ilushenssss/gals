@@ -1,24 +1,20 @@
-"""Точка входа веб-сервиса: API + статический фронтенд первой версии интерфейса.
+"""Точка входа веб-сервиса: только API.
 
 Приложение собирается фабрикой ``create_app(settings)`` — так тесты могут
 поднять его с другими настройками, а модульный ``app`` сохранен для
 ``uvicorn uav_planner.api.app:app`` и существующих тестов на ``TestClient``.
 
-Основной интерфейс — React-SPA из ``web/`` за nginx (сервис ``web`` в
-compose), который проксирует ``/api`` на этот процесс: origin один, поэтому
-CORS по умолчанию не нужен (список ``cors_origins`` пуст). Прежний vanilla-JS
-интерфейс ``api/static/index.html`` этот процесс пока тоже отдает — как эталон
-для сверки паритета при переносе в SPA; снимается после закрытия
-``web/PARITY.md``.
+Фронтенд этот процесс не отдает: интерфейс — React-SPA из ``web/`` за nginx
+(сервис ``web`` в compose), который проксирует ``/api`` сюда. Origin один,
+поэтому CORS не нужен (список ``cors_origins`` по умолчанию пуст и остается на
+случай, когда фронтенд поднимают отдельно). Прежний vanilla-JS интерфейс
+``api/static/`` снят 25.09.2026 после закрытия ``web/PARITY.md``.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from uav_planner.config import Settings, get_settings
 from uav_planner.logging_setup import configure_logging
@@ -32,8 +28,6 @@ from .routers.plan_jobs import router as plan_jobs_router
 from .routers.plans import router as plans_router
 from .routers.safety import router as safety_router
 from .routers.tasks import router as tasks_router
-
-STATIC_DIR = Path(__file__).parent / "static"
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
@@ -79,11 +73,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(plans_router)
     app.include_router(plan_jobs_router)
     app.include_router(safety_router)
-
-    # Раздается последним и поэтому не перехватывает /api/* — StaticFiles
-    # монтируется в "/" и по правилам маршрутизации Starlette пробуется
-    # только тогда, когда ни один include_router выше не подошел.
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")
 
     return app
 
