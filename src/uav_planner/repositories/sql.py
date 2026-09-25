@@ -305,6 +305,30 @@ class SafetyRepository:
         current_session().flush()
         return mappers.safety_report_from_row(row)
 
+    def set_all_violations_ignored(self, report_id: str, ignored: bool) -> SafetyReport | None:
+        """Отмечает ВСЕ нарушения отчёта принятыми (или снимает отметку со всех)
+        одним действием — кнопка «Игнорировать все нарушения» по запросу
+        пользователя, поверх точечной отметки ``set_violation_ignored``."""
+        key = _uuid_or_none(report_id)
+        row = current_session().get(SafetyReportRow, key) if key else None
+        if row is None:
+            raise KeyError(report_id)
+
+        any_violation = False
+        for check in row.checks:
+            violations = [dict(v) for v in (check.violations or [])]
+            if not violations:
+                continue
+            for violation in violations:
+                violation["ignored"] = ignored
+            check.violations = violations
+            any_violation = True
+        if not any_violation:
+            return None
+
+        current_session().flush()
+        return mappers.safety_report_from_row(row)
+
     def latest_report(self, plan_id: str) -> SafetyReport | None:
         key = _uuid_or_none(plan_id)
         if key is None:

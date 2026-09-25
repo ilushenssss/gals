@@ -76,7 +76,7 @@ def _create_task(client, env_id, fleet_id=None, **overrides):
         "environment_id": env_id,
         "fleet_id": fleet_id or _default_fleet_id(client),
         "survey_type": "RGB",
-        "gsd_cm": "3.0",
+        "gsd_cm": "1.9",  # 3.0 дает высоту выше потолка 150 м — см. test_api_plan.py::_create_task
         "work_date": "2026-06-15",
         "criterion_mode": "Время",
     }
@@ -120,22 +120,35 @@ def test_safety_check_happy_path_passes(client):
     assert body["auto_recalc_count"] == 0
 
 
-def test_safety_check_detects_altitude_ceiling_violation(client):
+def test_plan_creation_rejects_gsd_that_needs_height_above_altitude_ceiling(client):
     # Дефолтный gsd_cm=3.0 на камере pf1b (geoscan-gemini) дает высоту съемки
-    # 153.2 м — выше потолка 150 м; расчетное ядро детерминировано, поэтому
-    # ни один из трех автопересчетов это не исправит (высота не зависит от
-    # версии плана, только от GSD и камеры).
-    plan_id = _make_plan(client, n_fleet=1)
+    # 153.2 м — выше потолка 150 м. По запросу пользователя потолок теперь
+    # ограничивается уже на этапе расчета геометрии съемки по GSD
+    # (camera.plan_survey_geometry), а не только позже независимой проверкой
+    # безопасности — план с такой высотой вообще не создается.
+    env_id = _upload_environment(client)
+    _upload_fleet(client, n=1)
+    task_id = _create_task(client, env_id, gsd_cm="3.0")
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert "153" in detail
+    assert "150" in detail
+
+
+def test_safety_check_altitude_passes_when_height_within_ceiling(client):
+    # Номинальная H (2.5 см GSD на pf1b) в пределах потолка — не отбрасывается
+    # на этапе расчета геометрии, и независимая проверка тоже не находит
+    # нарушения (терраин-индуцированное отклонение AGL от номинальной H на
+    # отдельной точке маршрута — отдельный сценарий, покрыт на уровне чистой
+    # функции в test_safety_checks.py::test_max_altitude_with_agl_profile_*,
+    # без сети и без полного расчета плана).
+    plan_id = _make_plan(client, n_fleet=1, gsd_cm="2.5")
     resp = client.post("/api/safety-checks", data={"plan_id": plan_id})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     altitude = next(c for c in body["checks"] if c["name"] == "altitude")
-    assert altitude["passed"] is False
-    assert altitude["violations"]
-    assert "153" in altitude["violations"][0]["message"]
-    assert "150" in altitude["violations"][0]["message"]
-    assert body["status"] == "Есть нарушения"
-    assert body["auto_recalc_count"] == 3
+    assert altitude["passed"] is True
 
 
 def test_safety_check_detects_unavoidable_no_fly_zone_violation(client):
@@ -354,6 +367,52 @@ def test_ignoring_all_violations_acknowledges_the_report(client):
     )
     fetched = client.get("/api/safety-checks/latest", params={"plan_id": report["plan_id"]}).json()
     assert fetched["violations_acknowledged"] is True
+
+
+def test_ignore_all_button_acknowledges_the_report_in_one_call(client):
+    # Кнопка «Игнорировать все нарушения» — то же самое, что отметить каждую
+    # галочку по очереди, одним запросом.
+    plan_id = _make_plan(client, no_fly=True)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    all_violation_ids = [v["id"] for c in report["checks"] for v in c["violations"]]
+    assert len(all_violation_ids) >= 1
+
+    resp = client.post(
+        f"/api/safety-checks/{report['id']}/violations/ignore-all", data={"ignored": "true"},
+    )
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["violations_acknowledged"] is True
+    for c in updated["checks"]:
+        for v in c["violations"]:
+            assert v["ignored"] is True
+
+    # Снятие отметки со всех одним вызовом снова блокирует подтверждение.
+    resp = client.post(
+        f"/api/safety-checks/{report['id']}/violations/ignore-all", data={"ignored": "false"},
+    )
+    unignored = resp.json()
+    assert unignored["violations_acknowledged"] is False
+    for c in unignored["checks"]:
+        for v in c["violations"]:
+            assert v["ignored"] is False
+
+
+def test_ignore_all_for_report_without_violations_returns_404(client):
+    plan_id = _make_plan(client)
+    report = client.post("/api/safety-checks", data={"plan_id": plan_id}).json()
+    assert report["status"] == "Пройдена"
+    resp = client.post(
+        f"/api/safety-checks/{report['id']}/violations/ignore-all", data={"ignored": "true"},
+    )
+    assert resp.status_code == 404
+
+
+def test_ignore_all_for_unknown_report_returns_404(client):
+    resp = client.post(
+        "/api/safety-checks/does-not-exist/violations/ignore-all", data={"ignored": "true"},
+    )
+    assert resp.status_code == 404
 
 
 def test_ignoring_unknown_violation_returns_404(client):

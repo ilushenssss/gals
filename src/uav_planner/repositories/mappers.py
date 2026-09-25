@@ -287,6 +287,7 @@ def plan_to_rows(detail: PlanDetail) -> Plan:
         swath_m=detail.swath_m,
         cruise_speed_mps=detail.cruise_speed_mps,
         budget_s=detail.budget_s,
+        calculation_log=list(detail.calculation_log),
     )
     for sortie in detail.sorties:
         row.sorties.append(
@@ -332,6 +333,7 @@ def plan_from_row(row: Plan) -> PlanDetail:
         swath_m=row.swath_m,
         cruise_speed_mps=row.cruise_speed_mps,
         budget_s=row.budget_s,
+        calculation_log=list(row.calculation_log or []),
         sorties=[
             PlanSortie(
                 uav_id=s.uav_id,

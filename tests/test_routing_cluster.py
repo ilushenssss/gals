@@ -158,10 +158,18 @@ def test_tsp_order_beats_arbitrary_order():
 
 def test_bottleneck_balancing_reduces_imbalance_between_vehicles():
     # Восемь галсов вытянуты в линию между площадками A (в начале) и B (в
-    # конце): без балансировки взвешенное назначение (Шаг 2) все равно уже
-    # частично учитывает нагрузку, но остаточный дисбаланс есть — Шаг 4
-    # должен его дальше уменьшить, передав граничные галсы менее нагруженному.
-    tracks = [Track(id=f"n{i}", geometry=LineString([(i * 200, 0), (i * 200 + 100, 0)])) for i in range(8)]
+    # конце). Шаг 2 закрепляет их по чистой близости площадки (без поправки
+    # на нагрузку) — при равных по длине галсах это разбиение уже само по
+    # себе near-оптимально по балансу, поэтому здесь галсы у площадки A
+    # длиннее (180 м), чем у площадки B (60 м): близость к площадке (Шаг 2)
+    # не зависит от длины галса, а вот итоговая нагрузка — зависит, так что
+    # у A остаётся заметный избыток, который Шаг 4 должен уменьшить, передав
+    # площадке B её граничный (последний в туре A) галс.
+    long_len, short_len = 180.0, 60.0
+    tracks = [
+        Track(id=f"n{i}", geometry=LineString([(i * 200, 0), (i * 200 + (long_len if i < 6 else short_len), 0)]))
+        for i in range(8)
+    ]
     vehicles = [
         vehicle("A", 10.0, 10_000.0, launch_point=Point(0, 0)),
         vehicle("B", 10.0, 10_000.0, launch_point=Point(2500, 0)),
@@ -179,3 +187,34 @@ def test_bottleneck_balancing_reduces_imbalance_between_vehicles():
     for result in (unbalanced, balanced):
         all_ids = {t.id for sorties in result.sorties_by_vehicle.values() for s in sorties for t in s.tracks}
         assert all_ids == {t.id for t in tracks}
+
+
+def test_assignment_gives_each_vehicle_a_contiguous_spatial_strip():
+    # Воспроизводит реально диагностированную «шахматку»: несколько БВС с
+    # разных площадок работают по одной area — соседние по X галсы должны
+    # достаться одному и тому же борту, а не расходиться по бортам вперемешку
+    # только потому, что на момент обработки конкретного галса баланс
+    # нагрузки качнулся в другую сторону.
+    tracks = [Track(id=f"n{i}", geometry=LineString([(i * 100, 0), (i * 100, 500)])) for i in range(30)]
+    vehicles = [
+        vehicle("A", 10.0, 100_000.0, launch_point=Point(-500, 250)),
+        vehicle("B", 10.0, 100_000.0, launch_point=Point(1450, -1000)),
+        vehicle("C", 10.0, 100_000.0, launch_point=Point(3400, 250)),
+    ]
+
+    result = cluster_assign_and_route(tracks, vehicles)
+    assert result.unassigned_tracks == []
+
+    track_x = {t.id: t.geometry.coords[0][0] for t in tracks}
+    owner: dict[str, str] = {}
+    for vid, sorties in result.sorties_by_vehicle.items():
+        for sortie in sorties:
+            for t in sortie.tracks:
+                owner[t.id] = vid
+
+    ordered_owners = [owner[tid] for tid, _ in sorted(track_x.items(), key=lambda kv: kv[1])]
+    # Число «пробегов» одного и того же владельца подряд не должно превышать
+    # число бортов — иначе кто-то из них появляется, пропадает и появляется
+    # снова, перемешавшись с чужими галсами («шахматка»).
+    runs = 1 + sum(1 for a, b in zip(ordered_owners, ordered_owners[1:]) if a != b)
+    assert runs <= len(vehicles)

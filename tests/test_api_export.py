@@ -255,7 +255,9 @@ def test_kml_export_has_the_structure_required_by_the_spec(client):
 
     route = sortie_folder.findall("k:Placemark", KML_NS)[0]
     line = route.find("k:LineString", KML_NS)
-    assert line.find("k:altitudeMode", KML_NS).text == "relativeToGround"
+    # Маршрут хранит настоящую (или честно-плоскую) абсолютную высоту, не
+    # относительную — см. export_service.to_kml.
+    assert line.find("k:altitudeMode", KML_NS).text == "absolute"
     assert sortie_folder.findall("k:Placemark", KML_NS)[1].find("k:MultiGeometry", KML_NS) is not None
 
     point = next(p for p in sortie_folder.findall("k:Placemark", KML_NS) if p.find("k:Point", KML_NS) is not None)

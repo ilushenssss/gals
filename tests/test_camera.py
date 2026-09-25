@@ -100,9 +100,23 @@ def test_is_camera_compatible():
 
 
 def test_plan_survey_geometry_happy_path():
-    geometry = plan_survey_geometry("geoscan-201", "rx1rm2", gsd_cm=3.0)
+    # H≈230 м здесь сам по себе выше потолка 150 м (см. следующий тест) —
+    # это проверка именно формулы геометрии съемки, поэтому потолок явно
+    # снят большим max_altitude_m, а не переопределен GSD.
+    geometry = plan_survey_geometry("geoscan-201", "rx1rm2", gsd_cm=3.0, max_altitude_m=1000.0)
     assert geometry.height_m == pytest.approx(230.0, rel=0.05)
     assert geometry.track_spacing_m == pytest.approx(71.0, rel=0.05)
+
+
+def test_plan_survey_geometry_rejects_height_above_altitude_ceiling():
+    # По запросу пользователя: потолок 150 м ограничивается уже здесь, на
+    # этапе расчета геометрии съемки по GSD, а не только позже независимой
+    # проверкой безопасности (safety.checks.check_max_altitude).
+    with pytest.raises(CameraError):
+        plan_survey_geometry("geoscan-201", "rx1rm2", gsd_cm=3.0)
+    # Более мелкий GSD -> ниже высота -> в пределах потолка, без ошибки.
+    geometry = plan_survey_geometry("geoscan-201", "rx1rm2", gsd_cm=1.5)
+    assert geometry.height_m <= 150.0
 
 
 def test_plan_survey_geometry_rejects_incompatible_camera():

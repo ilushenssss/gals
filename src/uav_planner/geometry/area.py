@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Sequence
 
+from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
@@ -193,4 +194,35 @@ def compute_working_area(
     ]
     working = _subtract_footprints(working, obstacle_footprints)
 
+    working = _remove_enclosed_pockets(working, no_fly_footprints + obstacle_footprints)
+
     return working
+
+
+def _remove_enclosed_pockets(
+    working: BaseGeometry, restricted_footprints: Sequence[BaseGeometry]
+) -> BaseGeometry:
+    """Убирает из ``working`` куски, до которых нельзя долететь без пересечения
+    запретной зоны/препятствия — например, «безопасное ядро» кольцевой БПЗ,
+    целиком окружённое запретом (по запросу пользователя: такой участок
+    должен остаться непокрытым, а не соединяться с остальной рабочей
+    областью прямым переходом через запрет, как раньше).
+
+    Геометрически: если объединение запретных зон само образует замкнутое
+    кольцо (одна зона с дыркой, либо несколько зон, чьё объединение сомкнулось
+    без просвета), у объединения появляется внутреннее кольцо (``interiors``)
+    — область внутри него недостижима снаружи, не пересекая границу. Реальная
+    достижимость с конкретной площадки вылета (граф видимости с учётом
+    маршрута конкретного борта) — отдельная, более тяжёлая задача; здесь —
+    более простой и всегда корректный частный случай: полностью замкнутый
+    просвет исключается независимо от того, откуда потом полетит БВС.
+    """
+    if working.is_empty or not restricted_footprints:
+        return working
+
+    merged = unary_union(restricted_footprints)
+    polygons = merged.geoms if hasattr(merged, "geoms") else [merged]
+    pockets = [Polygon(ring) for poly in polygons for ring in getattr(poly, "interiors", [])]
+    if not pockets:
+        return working
+    return _subtract_footprints(working, pockets)

@@ -80,6 +80,10 @@ class Plan(Base):
     swath_m: Mapped[float] = mapped_column(Float, nullable=False)
     cruise_speed_mps: Mapped[float] = mapped_column(Float, nullable=False)
     budget_s: Mapped[float] = mapped_column(Float, nullable=False)
+    # История расчета простым языком (что и как считалось, почему выбран
+    # именно этот кандидат «модель+камера») — см. plan_service.build_candidate
+    # и _pick_best_candidate.
+    calculation_log: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
 
     sorties: Mapped[list["PlanSortie"]] = relationship(
         back_populates="plan",
@@ -124,9 +128,12 @@ class PlanSortie(Base):
     flight_time_s: Mapped[float] = mapped_column(Float, nullable=False)
     distance_m: Mapped[float] = mapped_column(Float, nullable=False)
     # Маршрут целиком (галсы + перелеты) и отдельно только галсы: проверка
-    # покрытия обязана смотреть на галсы, а не на весь трек.
-    route_geom = mapped_column(Geometry("LINESTRING", srid=4326), nullable=False)
-    survey_tracks_geom = mapped_column(Geometry("MULTILINESTRING", srid=4326), nullable=False)
+    # покрытия обязана смотреть на галсы, а не на весь трек. Z — абсолютная
+    # высота (рельеф + целевая AGL, либо плоский фолбэк, см.
+    # plan_service._apply_terrain_profile) — всегда 3D, ни одна, ни другая
+    # колонка не смешивает 2D/3D геометрии между строками.
+    route_geom = mapped_column(Geometry("LINESTRINGZ", srid=4326, dimension=3), nullable=False)
+    survey_tracks_geom = mapped_column(Geometry("MULTILINESTRINGZ", srid=4326, dimension=3), nullable=False)
     # Этапы вылета (перелёт/галс/переход/возврат) с временами и длинами —
     # структура целиком задаётся расчётом и будет меняться, поэтому jsonb,
     # а не таблица.

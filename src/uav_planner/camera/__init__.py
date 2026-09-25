@@ -9,6 +9,7 @@ from .specs import (
     is_camera_compatible,
 )
 from .optics import (
+    DEFAULT_MAX_ALTITUDE_M,
     SurveyGeometry,
     survey_height,
     swath_width,
@@ -34,4 +35,5 @@ __all__ = [
     "track_spacing",
     "trigger_spacing",
     "plan_survey_geometry",
+    "DEFAULT_MAX_ALTITUDE_M",
 ]

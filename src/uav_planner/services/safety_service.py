@@ -34,6 +34,7 @@ from uav_planner.geometry import (
 from uav_planner.jobs.progress import ProgressReporter
 from uav_planner.logging_setup import log_context
 from uav_planner.safety import (
+    DEFAULT_ALTITUDE_STEP_M,
     CheckResult,
     SortieTrack,
     Violation,
@@ -45,11 +46,14 @@ from uav_planner.safety import (
     check_max_altitude,
     check_reachability,
     check_separation,
+    discretize,
 )
+from uav_planner.terrain import ElevationLookupError
 
 from . import plan_service
 from . import environment_service
 from . import task_service
+from . import terrain_service
 from uav_planner.api.schemas.plan import PlanDetail
 from uav_planner.api.schemas.safety import SafetyCheckOut, SafetyReport, ViolationOut
 
@@ -78,6 +82,31 @@ def _valid_features(env, layer: str) -> list[dict]:
 
 def _time_to_hours(t) -> float | None:
     return None if t is None else t.hour + t.minute / 60.0 + t.second / 3600.0
+
+
+def _agl_by_point(sample_points_utm: list[Point], projector: Projector) -> list[tuple[Point, float]] | None:
+    """Независимо перепроверяет высоту над рельефом в точках маршрута —
+    свой запрос к провайдеру высот, не переиспользующий профиль, который
+    уже посчитал ``plan_service`` при встраивании рельефа в маршрут (тот же
+    принцип независимости, что у остальных проверок этого модуля).
+
+    ``None`` — рельеф не проверяем отдельно (выключен, точек нет, или
+    провайдер недоступен): ``check_max_altitude`` тогда честно деградирует
+    к сравнению одного числа ``plan.height_m``, а не молча пропускает
+    проверку."""
+    if not sample_points_utm:
+        return None
+    provider = terrain_service.default_elevation_provider()
+    if provider is None:
+        return None
+
+    points_wgs84 = [projector.to_wgs84(Point(p.x, p.y)).coords[0] for p in sample_points_utm]
+    try:
+        ground_m = provider.elevations(points_wgs84)
+    except ElevationLookupError:
+        log.warning("независимая проверка рельефа недоступна — высота сверяется как абсолютная")
+        return None
+    return [(p, p.z - g) for p, g in zip(sample_points_utm, ground_m)]
 
 
 def sortie_label(sortie) -> str:
@@ -182,6 +211,7 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
     daylight_results: list[tuple[str | None, CheckResult]] = []
     sortie_tracks: list[SortieTrack] = []
     all_survey_tracks_utm: list[BaseGeometry] = []
+    altitude_sample_points_utm: list[Point] = []
 
     for sortie in plan.sorties:
         label = sortie_label(sortie)
@@ -190,6 +220,8 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         all_survey_tracks_utm.extend(
             list(survey_utm.geoms) if survey_utm.geom_type == "MultiLineString" else [survey_utm]
         )
+        if route_utm.has_z:
+            altitude_sample_points_utm.extend(discretize(route_utm, DEFAULT_ALTITUDE_STEP_M))
 
         geozone_results.append(
             (label, check_geozones(route_utm, no_fly_footprints, obstacle_footprints))
@@ -236,7 +268,7 @@ def _run_checks(env, task, plan: PlanDetail) -> list[SafetyCheckOut]:
         )
 
     separation_result = check_separation(sortie_tracks)
-    altitude_result = check_max_altitude(plan.height_m)
+    altitude_result = check_max_altitude(plan.height_m, agl_by_point=_agl_by_point(altitude_sample_points_utm, projector))
 
     return [
         _combine("geozones", geozone_results, projector),
@@ -411,6 +443,26 @@ def set_violation_ignored(report_id: str, violation_id: str, ignored: bool) -> S
         "отметка принятия нарушения изменена",
         extra={
             "report_id": report_id, "violation_id": violation_id, "ignored": ignored,
+            "violations_acknowledged": updated.violations_acknowledged,
+        },
+    )
+    return updated
+
+
+def set_all_violations_ignored(report_id: str, ignored: bool) -> SafetyReport:
+    """Кнопка «Игнорировать все нарушения» (по запросу пользователя) — отмечает
+    принятыми сразу все нарушения отчёта, не по одному. То же расширение
+    поверх ЭКС.ФТ.2, что и ``set_violation_ignored``: подтверждение плана
+    разблокируется, только когда отмечено действительно каждое нарушение —
+    массовая отметка — просто быстрый способ дойти до этого состояния, а не
+    отдельное правило."""
+    updated = repositories.safety.set_all_violations_ignored(report_id, ignored)
+    if updated is None:
+        raise ViolationNotFoundError(f"в отчете {report_id} нет нарушений")
+    log.info(
+        "отметка принятия нарушений изменена для всего отчета",
+        extra={
+            "report_id": report_id, "ignored": ignored,
             "violations_acknowledged": updated.violations_acknowledged,
         },
     )

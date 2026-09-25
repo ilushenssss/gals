@@ -91,3 +91,19 @@ def ignore_violation(report_id: str, violation_id: str, ignored: bool = Form(...
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except KeyError:
         raise HTTPException(status_code=404, detail="отчет проверки не найден")
+
+
+@router.post(
+    "/safety-checks/{report_id}/violations/ignore-all",
+    response_model=SafetyReport,
+)
+def ignore_all_violations(report_id: str, ignored: bool = Form(...)) -> SafetyReport:
+    """Кнопка «Игнорировать все нарушения» — то же самое, что отметить
+    вручную каждую галочку по очереди, одним действием (по запросу
+    пользователя)."""
+    try:
+        return safety_service.set_all_violations_ignored(report_id, ignored)
+    except safety_service.ViolationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KeyError:
+        raise HTTPException(status_code=404, detail="отчет проверки не найден")

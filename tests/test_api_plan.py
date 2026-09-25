@@ -68,7 +68,13 @@ def _create_task(client, env_id, fleet_id=None, **overrides):
         "environment_id": env_id,
         "fleet_id": fleet_id or _default_fleet_id(client),
         "survey_type": "RGB",
-        "gsd_cm": "3.0",
+        # 1.9, не 3.0: с камерой pf1b (geoscan-gemini) высота 3.0 см дает
+        # 153.2 м, с rx1rm2 (geoscan-201) — 232.6 м, оба выше потолка 150 м,
+        # который теперь ограничивается уже на этапе расчета геометрии
+        # съемки (camera.plan_survey_geometry) — план с такой высотой
+        # вообще не создастся. 1.9 см держит высоту под потолком у обеих
+        # камер, использующихся в этом файле.
+        "gsd_cm": "1.9",
         "work_date": "2026-06-15",
         "criterion_mode": "Время",
     }
@@ -122,6 +128,33 @@ def test_get_plan_returns_sorties_with_route_geometry(client):
         assert sortie["track_geojson"]["type"] == "LineString"
         assert sortie["flight_time_s"] > 0
         assert sortie["end_utc"] > sortie["start_utc"]
+
+
+def test_plan_calculation_log_explains_the_result_in_plain_language(client):
+    env_id = _upload_environment(client)
+    _upload_fleet(client)
+    task_id = _create_task(client, env_id)
+    summary = client.post("/api/plans", data={"task_id": task_id}).json()
+
+    detail = client.get(f"/api/plans/{summary['id']}").json()
+    log_lines = detail["calculation_log"]
+    assert log_lines, "история расчета не должна быть пустой"
+
+    # Первая фраза называет задачу/обстановку/парк — оператор должен узнать,
+    # о каком расчете речь, не открывая карточку задачи отдельно.
+    assert "Задача «Задача 1»" in log_lines[0]
+    assert "Обстановка" in log_lines[0]
+    assert "Парк" in log_lines[0]
+
+    # Есть фраза с формулой высоты и реально подставленным числом высоты.
+    height_line = next((line for line in log_lines if "H = GSD" in line), None)
+    assert height_line is not None
+    assert f"{detail['height_m']:.1f}" in height_line
+
+    # Единственный кандидат в этом парке — заключительная фраза называет его,
+    # а не сравнение с другими (сравнивать не с чем).
+    assert "Единственный подходящий кандидат" in log_lines[-1]
+    assert detail["uav_model"] in log_lines[-1]
 
 
 def test_second_calculation_creates_new_version(client):
@@ -417,7 +450,9 @@ def test_work_splits_across_two_vehicles_at_opposite_ends_of_the_area(client):
     area = {"type": "Polygon", "coordinates": square_coords(37.552, 55.702, 0.026, 0.004)}
     form = {
         "name": "Задача с двумя площадками", "environment_id": env_id, "fleet_id": fleet_id, "survey_type": "RGB",
-        "gsd_cm": "3.0", "work_date": "2026-06-15", "criterion_mode": "Время",
+        # 1.9, не 3.0: на geoscan-gemini (pf1b) 3.0 см дает высоту 153.2 м —
+        # выше потолка 150 м, план не создастся.
+        "gsd_cm": "1.9", "work_date": "2026-06-15", "criterion_mode": "Время",
     }
     resp = client.post(
         "/api/tasks", data=form,

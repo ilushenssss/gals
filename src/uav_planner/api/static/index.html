@@ -98,9 +98,18 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 
 /* ---- легенда карты (ИНТ.ФТ.6) ---- */
 .legend{position:absolute;left:12px;bottom:12px;z-index:400;background:var(--card-bg);border:1px solid var(--rule);border-radius:8px;padding:10px 12px;font-size:12.5px;box-shadow:0 2px 10px rgba(0,0,0,.12);max-width:230px}
+/* ---- маркер старта вылета на карте плана — отличается от обычных точек
+   галса пунктирным контуром, чтобы сразу было видно, откуда БВС летит ---- */
+.start-marker{stroke-dasharray:3 2}
 .legend[hidden]{display:none}
 .legend label{display:flex;align-items:center;gap:7px;margin:4px 0;cursor:pointer}
 .legend .sw{width:14px;height:14px;border-radius:3px;flex:none;display:inline-block}
+
+/* ---- переключатель подложки карты: спутник/схема ---- */
+.basemap-toggle{position:absolute;top:12px;right:12px;z-index:400;display:flex;background:var(--card-bg);border:1px solid var(--rule);border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.12);overflow:hidden}
+.basemap-toggle button{border:none;background:transparent;color:var(--ink);font-size:12.5px;font-weight:600;padding:7px 12px;cursor:pointer;font-family:inherit}
+.basemap-toggle button:first-child{border-right:1px solid var(--rule)}
+.basemap-toggle button.active{background:var(--area);color:#fff}
 
 /* ---- toast (ИНТ.ФТ.19) ---- */
 #toast-container{position:fixed;top:58px;right:16px;z-index:2000;display:flex;flex-direction:column;gap:8px}
@@ -239,6 +248,10 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     <aside id="sidebar" hidden></aside>
     <div id="map-area">
       <div id="map"></div>
+      <div class="basemap-toggle" id="basemap-toggle">
+        <button type="button" data-basemap="satellite" class="active">Спутник</button>
+        <button type="button" data-basemap="schema">Схема</button>
+      </div>
       <div class="legend" id="legend" hidden></div>
     </div>
   </div>
@@ -303,12 +316,34 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   // данных OpenStreetMap (в отличие от CARTO Positron, которую использовали
   // раньше: та тоже основана на данных OSM, просто иначе раскрашена).
   // Бесплатно для этого масштаба использования, без API-ключа; требуемая
-  // атрибуция Esri указана явно.
+  // атрибуция Esri указана явно. «Схема» — тот же провайдер (Esri World
+  // Street Map, не OSM), чтобы не нарушать это решение переключателем.
   var map = L.map("map", { zoomControl: true }).setView([55.75, 37.6], 6);
-  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-    maxZoom: 19,
-    attribution: "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community"
-  }).addTo(map);
+  var BASEMAPS = {
+    satellite: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community"
+    }),
+    schema: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri — Source: Esri, HERE, Garmin, FAO, NOAA, USGS"
+    })
+  };
+  var currentBasemap = "satellite";
+  BASEMAPS[currentBasemap].addTo(map);
+
+  document.querySelectorAll("#basemap-toggle button").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var next = btn.getAttribute("data-basemap");
+      if (next === currentBasemap) return;
+      map.removeLayer(BASEMAPS[currentBasemap]);
+      BASEMAPS[next].addTo(map);
+      currentBasemap = next;
+      document.querySelectorAll("#basemap-toggle button").forEach(function (b) {
+        b.classList.toggle("active", b === btn);
+      });
+    });
+  });
 
   var layerGroups = {
     launch_site: null, airspace: null, no_fly: null, obstacle: null,
@@ -442,6 +477,40 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     setTimeout(function () { el.remove(); }, 5000);
     el.addEventListener("click", function () { el.remove(); });
   }
+
+  // ---------- fetchJson: единая точка разбора ответа сервера ----------
+  // Раньше многие цепочки делали `fetch(url).then(r => r.json())` без
+  // проверки `r.ok` — при 4xx/5xx сервер тоже отдаёт валидный JSON
+  // (`{"detail": "..."}`), и код молча продолжал работать с объектом
+  // ошибки вместо ожидаемых данных: где-то дальше падало на доступе к
+  // несуществующему полю, без единого тоста — снаружи выглядело так, будто
+  // расчет «вылетел без сообщения об ошибке». `fetchJson` разбирает тело
+  // один раз и либо возвращает его, либо бросает `Error` с текстом сервера
+  // (`detail`) — тогда обычный `.catch(err => toast(err.message, true))`
+  // внизу цепочки этот текст покажет.
+  function fetchJson(url, options) {
+    return fetch(url, options).then(function (res) {
+      return res.json().catch(function () { return null; }).then(function (body) {
+        if (!res.ok) {
+          throw new Error((body && body.detail) || ("Сервер вернул ошибку " + res.status));
+        }
+        return body;
+      });
+    });
+  }
+
+  // Последний рубеж: если где-то забыт .catch (в новом коде или в цепочке,
+  // которую не заметили при аудите), браузер сам не покажет пользователю
+  // ничего — именно так расчет мог «вылетать без сообщения об ошибке».
+  // Это событие срабатывает только когда отклонение НИКТО не обработал
+  // (если у цепочки уже есть свой .catch с тостом — сюда оно не попадет,
+  // дублирования не будет), поэтому это чистый запасной вариант, а не
+  // повторный показ уже показанной ошибки.
+  window.addEventListener("unhandledrejection", function (event) {
+    var reason = event.reason;
+    var message = (reason && reason.message) || "Непредвиденная ошибка — подробности в консоли браузера (F12)";
+    toast(message, true);
+  });
 
   // ---------- индикатор "идёт расчёт" на кнопках длительных операций (Рассчитать,
   // Пересчитать, Проверить безопасность) — крутящийся индикатор + текст, кнопка
@@ -1150,6 +1219,20 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     el.hidden = false;
     wireCatalogTabs("create");
 
+    // Клик по обстановке в списке сразу фокусирует на ней карту (границы её
+    // слоёв), не дожидаясь «Далее» — иначе список выглядит «глухим»: выбор
+    // ничего не меняет на экране, пока не подтвердишь его отдельной кнопкой.
+    el.querySelectorAll('input[name="pick-env"]').forEach(function (input) {
+      input.addEventListener("change", function () {
+        var env = environments.filter(function (e) { return e.id === input.value; })[0];
+        if (!env) return;
+        fetch("/api/environments/" + env.id).then(function (r) { return r.json(); }).then(function (fullEnv) {
+          renderLayers(fullEnv);
+          renderLegend(fullEnv);
+        });
+      });
+    });
+
     document.getElementById("btn-new-env").addEventListener("click", function () {
       openEnvironmentUploadModal(function (summary) {
         newTaskSelection.environmentId = summary.id;
@@ -1574,18 +1657,18 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     // загружена (или к никакой, если попали сюда со страницы «История» до
     // загрузки данных вообще) — сначала догружаем нужную обстановку, чтобы
     // карта показывала правильные зоны/препятствия под областью задачи.
-    fetch("/api/tasks/" + id).then(function (r) { return r.json(); }).then(function (task) {
+    fetchJson("/api/tasks/" + id).then(function (task) {
       if (currentEnvironment && currentEnvironment.id === task.environment_id) {
         showTaskDetailScreen(task);
         return;
       }
-      fetch("/api/environments/" + task.environment_id).then(function (r) { return r.json(); }).then(function (env) {
+      return fetchJson("/api/environments/" + task.environment_id).then(function (env) {
         currentEnvironment = env;
         renderLayers(env);
         renderLegend(env);
         showTaskDetailScreen(task);
       });
-    });
+    }).catch(function (err) { toast(err.message, true); });
   }
 
   function renderTaskAreaOnMap(task) {
@@ -1638,9 +1721,9 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     });
     if (task.status === "Рассчитана") {
       document.getElementById("btn-view-plan").addEventListener("click", function () {
-        fetch("/api/plans?task_id=" + task.id).then(function (r) { return r.json(); }).then(function (versions) {
+        fetchJson("/api/plans?task_id=" + task.id).then(function (versions) {
           if (versions.length) loadPlan(versions[0].id, task);
-        });
+        }).catch(function (err) { toast(err.message, true); });
       });
     }
     reconnectActiveJob(task);
@@ -1764,33 +1847,33 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
     var failure = jobFailureMessage(job);
     if (failure) { toast(failure, true); showTaskDetailScreen(task); return; }
     if (job.kind === "plan") {
-      fetch("/api/plans/" + job.result_plan_id).then(function (r) { return r.json(); }).then(function (plan) {
+      fetchJson("/api/plans/" + job.result_plan_id).then(function (plan) {
         toast("Расчет завершен: " + plan.sortie_count + " вылет(ов)", plan.warnings.length > 0);
         loadPlan(plan.id, task);
-      });
+      }).catch(function (err) { toast(err.message, true); });
       return;
     }
     // kind === "safety"
     Promise.all([
-      fetch("/api/plans/" + job.result_plan_id).then(function (r) { return r.json(); }),
-      fetch("/api/safety-checks/latest?plan_id=" + job.result_plan_id).then(function (r) { return r.json(); })
+      fetchJson("/api/plans/" + job.result_plan_id),
+      fetchJson("/api/safety-checks/latest?plan_id=" + job.result_plan_id)
     ]).then(function (results) {
       var plan = results[0], report = results[1];
       if (report.auto_recalc_count > 0) {
         toast("Автоматических пересчетов: " + report.auto_recalc_count + " из 3", report.status !== "Пройдена");
       }
       showSafetyScreen(task, plan, report);
-    });
+    }).catch(function (err) { toast(err.message, true); });
   }
 
   function reconnectActiveJob(task) {
     // ПЛН.ФТ.5: получасовой расчет должен переживать перезагрузку вкладки —
     // если по задаче уже есть неоконченная работа, сразу показываем ее
     // прогресс вместо кнопки «Рассчитать», а не даем запустить вторую.
-    fetch("/api/plan-jobs?task_id=" + task.id).then(function (r) { return r.json(); }).then(function (jobs) {
+    fetchJson("/api/plan-jobs?task_id=" + task.id).then(function (jobs) {
       var active = jobs.filter(function (j) { return !jobIsFinished(j); })[0];
       if (active) runJobInSidebar(active.id, function (job) { handleJobFinished(job, task); });
-    });
+    }).catch(function (err) { toast(err.message, true); });
   }
 
   function runPlanCalculation(task) {
@@ -1820,11 +1903,11 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
 
   function loadPlan(planId, task) {
     Promise.all([
-      fetch("/api/plans/" + planId).then(function (r) { return r.json(); }),
-      fetch("/api/plans?task_id=" + task.id).then(function (r) { return r.json(); })
+      fetchJson("/api/plans/" + planId),
+      fetchJson("/api/plans?task_id=" + task.id)
     ]).then(function (results) {
       showPlanScreen(task, results[0], results[1]);
-    });
+    }).catch(function (err) { toast(err.message, true); });
   }
 
   var ROUTE_DIM_COLOR = "#9aa5a9";
@@ -1870,6 +1953,24 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       layerGroups.plan_routes.addLayer(layer);
       sortieRouteLayers[String(i)] = { layer: layer, color: color };
       allBounds.push(layer.getBounds());
+
+      // Откуда БВС летит изначально — иначе на карте не видно, где начало
+      // маршрута среди множества галсов и переходов (по запросу пользователя).
+      var routeCoords = sortie.track_geojson && sortie.track_geojson.coordinates;
+      if (routeCoords && routeCoords.length) {
+        var start = routeCoords[0];
+        var startMarker = L.circleMarker([start[1], start[0]], {
+          radius: 9, color: "#fff", weight: 2, fillColor: color, fillOpacity: 1, className: "start-marker"
+        });
+        startMarker.bindTooltip("Старт: " + escapeHtml(sortie.uav_id), {
+          permanent: true, direction: "top", offset: [0, -8], className: ""
+        });
+        startMarker.bindPopup(
+          "Старт вылета " + (sortie.sortie_index + 1) + " (" + escapeHtml(sortie.uav_id) + ")" +
+          (sortie.takeoff_site ? "<br>Площадка: «" + escapeHtml(sortie.takeoff_site) + "»" : "")
+        );
+        layerGroups.plan_routes.addLayer(startMarker);
+      }
     });
 
     var valid = allBounds.filter(function (b) { return b.isValid(); });
@@ -1928,14 +2029,23 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
           "<td style=\"padding:4px 6px;white-space:nowrap\">" + formatDuration(s.flight_time_s) + "</td></tr>";
         html += '<tr class="sortie-detail" data-sortie-idx="' + i + '" hidden><td colspan="4" style="padding:0 6px 8px">' +
           '<ul class="phase-list">' + (s.phases || []).map(function (p) {
+            var agl = (p.height_agl_m === null || p.height_agl_m === undefined) ? "" : " · " + Math.round(p.height_agl_m) + " м над рельефом";
             return '<li><span class="ph-label">' + escapeHtml(p.label) + '</span>' +
               '<span class="ph-time">' + formatTime(p.start_utc) + "–" + formatTime(p.end_utc) +
-              " · " + Math.round(p.distance_m) + " м</span></li>";
+              " · " + Math.round(p.distance_m) + " м" + agl + "</span></li>";
           }).join("") + "</ul></td></tr>";
       });
       html += "</tbody></table></div>";
     } else {
       html += '<p class="sb-sub">Ни одного вылета не назначено.</p>';
+    }
+
+    if (plan.calculation_log && plan.calculation_log.length) {
+      html += '<details class="history" style="margin-top:14px;padding-top:14px">' +
+        '<summary style="cursor:pointer;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.02em">История расчета</summary>' +
+        '<ol style="margin:10px 0 0;padding-left:18px;font-size:12px;color:var(--ink);display:flex;flex-direction:column;gap:6px">' +
+        plan.calculation_log.map(function (line) { return "<li>" + escapeHtml(line) + "</li>"; }).join("") +
+        "</ol></details>";
     }
 
     if (versions.length > 1) {
@@ -2028,7 +2138,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
           return;
         }
         // БЕЗ.ФТ.3: план был автоматически пересчитан — подгружаем итоговую версию.
-        return fetch("/api/plans/" + report.plan_id).then(function (r) { return r.json(); }).then(function (newPlan) {
+        return fetchJson("/api/plans/" + report.plan_id).then(function (newPlan) {
           toast("Автоматических пересчетов: " + report.auto_recalc_count + " из 3", report.status !== "Пройдена");
           showSafetyScreen(task, newPlan, report);
         });
@@ -2039,8 +2149,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   function rerunSafetyCheck(task, plan) {
     var fd = new FormData();
     fd.append("plan_id", plan.id);
-    return fetch("/api/safety-checks/recheck", { method: "POST", body: fd })
-      .then(function (res) { return res.json(); })
+    return fetchJson("/api/safety-checks/recheck", { method: "POST", body: fd })
       .then(function (report) {
         toast(report.status === "Пройдена" ? "Проверка пройдена" : "Нарушения сохраняются", report.status !== "Пройдена");
         showSafetyScreen(task, plan, report);
@@ -2134,6 +2243,9 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
       html += '<button class="btn" id="btn-safety-recheck">Повторить проверку</button>';
       html += '<button class="btn" id="btn-safety-back-task">Вернуться к задаче</button>';
       html += "</div>";
+      if (!report.violations_acknowledged) {
+        html += '<button class="btn" id="btn-ignore-all" style="width:100%;margin-top:8px">Игнорировать все нарушения</button>';
+      }
       if (report.violations_acknowledged) {
         html += '<p class="hint" style="margin-top:10px">Все нарушения отмечены галочкой «принято» — план можно подтвердить и экспортировать, несмотря на них.</p>';
         html += '<button class="btn primary" id="btn-go-export" style="width:100%;margin-top:4px">Подтвердить и перейти к экспорту</button>';
@@ -2154,6 +2266,17 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
         withBusyButton(e.currentTarget, "Проверяем...", rerunSafetyCheck(task, plan));
       });
       document.getElementById("btn-safety-back-task").addEventListener("click", function () { showTaskDetailScreen(task); });
+      var ignoreAllBtn = document.getElementById("btn-ignore-all");
+      if (ignoreAllBtn) {
+        ignoreAllBtn.addEventListener("click", function (e) {
+          var fd = new FormData();
+          fd.append("ignored", "true");
+          withBusyButton(e.currentTarget, "Отмечаем...",
+            fetchJson("/api/safety-checks/" + report.id + "/violations/ignore-all", { method: "POST", body: fd })
+              .then(function (updatedReport) { showSafetyScreen(task, plan, updatedReport); })
+              .catch(function (err) { toast(err.message, true); }));
+        });
+      }
     }
     var goExportBtn = document.getElementById("btn-go-export");
     if (goExportBtn) {
@@ -2211,20 +2334,20 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   // ---------- Экран 6: подтверждение и экспорт (ЭКС.ФТ.1-9) ----------
   function goToSafetyScreen(task, planId) {
     Promise.all([
-      fetch("/api/plans/" + planId).then(function (r) { return r.json(); }),
+      fetchJson("/api/plans/" + planId),
       fetch("/api/safety-checks/latest?plan_id=" + planId).then(function (r) { return r.ok ? r.json() : null; })
     ]).then(function (results) {
       if (results[1]) { showSafetyScreen(task, results[0], results[1]); } else { loadPlan(planId, task); }
-    });
+    }).catch(function (err) { toast(err.message, true); });
   }
 
   function loadExportScreen(planId, task) {
     Promise.all([
-      fetch("/api/plans/" + planId).then(function (r) { return r.json(); }),
+      fetchJson("/api/plans/" + planId),
       fetch("/api/safety-checks/latest?plan_id=" + planId).then(function (r) { return r.ok ? r.json() : null; })
     ]).then(function (results) {
       showExportScreen(task, results[0], results[1]);
-    });
+    }).catch(function (err) { toast(err.message, true); });
   }
 
   function confirmPlan(planId, confirmedBy) {
@@ -2351,7 +2474,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   }
 
   function renderHistory() {
-    fetch("/api/environments").then(function (r) { return r.json(); }).then(function (list) {
+    fetchJson("/api/environments").then(function (list) {
       var ul = document.getElementById("history-list");
       if (!ul) return;
       ul.innerHTML = "";
@@ -2364,7 +2487,7 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
         li.appendChild(a);
         ul.appendChild(li);
       });
-    });
+    }).catch(function (err) { toast(err.message, true); });
   }
 
   function escapeHtml(s) {
@@ -2374,10 +2497,10 @@ code{font-family:"PT Mono",ui-monospace,Menlo,Consolas,monospace}
   }
 
   function loadEnvironment(id) {
-    fetch("/api/environments/" + id).then(function (r) { return r.json(); }).then(function (env) {
+    fetchJson("/api/environments/" + id).then(function (env) {
       currentEnvironment = env;
       showEnvironmentScreen();
-    });
+    }).catch(function (err) { toast(err.message, true); });
   }
 
   showCatalogScreen("park"); // стартовый экран — каталог, а не пустая карта с кнопкой «Загрузить данные»

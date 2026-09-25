@@ -91,6 +91,25 @@ def engine(database_url):
 
 
 @pytest.fixture(autouse=True)
+def fake_terrain_provider(monkeypatch):
+    """Автосюит не ходит в сеть за рельефом (см. uav_planner.terrain) —
+    ``ConstantElevationProvider`` вместо реального Open Topo Data везде, где
+    ``plan_service``/``safety_service`` берут провайдер через
+    ``services.terrain_service.default_elevation_provider``.
+
+    Рельеф остается ВКЛЮЧЕН (плоский, 0 м) — так тесты покрывают код облета
+    рельефа (3D-координаты в track_geojson, height_agl_m), а не только путь
+    «рельеф выключен». Тест, которому явно нужен отключенный рельеф или
+    иной профиль, подменяет фикстуру локально через ``monkeypatch`` ещё раз.
+    """
+    from uav_planner.terrain import ConstantElevationProvider
+
+    provider = ConstantElevationProvider(height_m=0.0)
+    monkeypatch.setattr("uav_planner.services.terrain_service.default_elevation_provider", lambda: provider)
+    return provider
+
+
+@pytest.fixture(autouse=True)
 def eager_celery():
     """Задачи выполняются синхронно, без Redis.
 

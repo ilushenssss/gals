@@ -93,6 +93,29 @@ def test_max_altitude_respects_custom_limit():
     assert check_max_altitude(80.0, limit_m=100.0).passed
 
 
+def test_max_altitude_with_agl_profile_ignores_scalar_height():
+    # agl_by_point задан — сравнение идет по нему, а не по height_m (даже
+    # если height_m сам по себе больше потолка: рельеф может «съедать»
+    # разницу, реальная высота над поверхностью остается в норме).
+    agl_by_point = [(Point(0, 0), 140.0), (Point(100, 0), 145.0), (Point(200, 0), 149.0)]
+    result = check_max_altitude(999.0, agl_by_point=agl_by_point)
+    assert result.passed
+
+
+def test_max_altitude_with_agl_profile_flags_the_offending_point_not_all():
+    agl_by_point = [(Point(0, 0), 140.0), (Point(100, 0), 160.0), (Point(200, 0), 145.0)]
+    result = check_max_altitude(150.0, agl_by_point=agl_by_point)
+    assert not result.passed
+    assert len(result.violations) == 1
+    assert result.violations[0].point == Point(100, 0)
+    assert "160" in result.violations[0].message
+    assert "150" in result.violations[0].message
+
+
+def test_max_altitude_with_empty_agl_profile_passes_trivially():
+    assert check_max_altitude(999.0, agl_by_point=[]).passed
+
+
 def test_energy_passes_within_budget():
     result = check_energy(route_length_m=1000, cruise_speed_mps=10, budget_s=200)
     assert result.passed

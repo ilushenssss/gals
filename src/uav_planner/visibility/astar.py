@@ -26,11 +26,16 @@ v1-ограничения (честно, а не молча):
     безопасности, см. ``uav_planner.safety.check_geozones``);
   - размер сетки ограничен ``MAX_GRID_DIM`` ячеек на сторону — при
     необходимости шаг сетки автоматически укрупняется, чтобы не подвесить
-    расчет на очень длинных переходах;
-  - учитывает только переданные препятствия (бесполетные зоны, высотные
-    препятствия) — не проверяет, что маршрут остается внутри разрешенного
-    воздушного пространства (это отдельная проверка,
-    ``uav_planner.safety.check_allowed_space``).
+    расчет на очень длинных переходах.
+
+``allowed_space`` (опционально) — union активных на съемочной высоте зон
+разрешенного пространства: если задан, область ЗА его пределами (в границах
+локальной сетки перехода) добавляется в число препятствий наравне с БПЗ и
+высотными препятствиями — раньше переход строил кратчайший обход только
+БПЗ/препятствий и мог по прямой уйти за границу разрешенного пространства
+(особенно на невыпуклой границе — «залив» на карте разрешенной зоны), если
+сама прямая ничего из явных препятствий не задевала. Без этого параметра
+поведение прежнее (для существующих вызовов/тестов, которых это не касается).
 """
 
 from __future__ import annotations
@@ -144,10 +149,12 @@ def find_path(
     start: Point,
     goal: Point,
     obstacles: Sequence[BaseGeometry],
+    allowed_space: BaseGeometry | None = None,
     cell_size_m: float = DEFAULT_CELL_SIZE_M,
 ) -> PathResult:
     """Маршрут ``start -> goal``, обходящий ``obstacles`` (бесполетные зоны и
-    высотные препятствия — их ``footprint()``), если прямая линия их пересекает."""
+    высотные препятствия — их ``footprint()``) и не выходящий за границу
+    ``allowed_space`` (если задана), если прямая линия нарушает то или другое."""
     direct = LineString([start, goal])
     if direct.length == 0:
         return PathResult(direct, False, False)
@@ -155,6 +162,19 @@ def find_path(
     padding = max(cell_size_m * GRID_PADDING_CELLS, 0.15 * direct.length, MIN_PADDING_M)
     search_box = box(*direct.buffer(padding).bounds)
     relevant = [o for o in obstacles if o is not None and not o.is_empty and search_box.intersects(o)]
+
+    outside_allowed = None
+    if allowed_space is not None and not allowed_space.is_empty:
+        # «Препятствие» — всё внутри локальной сетки перехода, что лежит ЗА
+        # пределами разрешенного пространства (граница сетки гарантирует, что
+        # это всегда конечный полигон, даже если allowed_space сам не выпуклый
+        # или имеет дыры). Считается на ``search_box``, а не на итоговых
+        # границах сетки — те увеличатся ниже вторым отступом ``padding`` и
+        # округлением ``MAX_GRID_DIM``; см. пересчет ниже.
+        outside_allowed = search_box.difference(allowed_space)
+        if not outside_allowed.is_empty:
+            relevant.append(outside_allowed)
+
     if not relevant:
         return PathResult(direct, False, False)
 
@@ -173,6 +193,20 @@ def find_path(
         cell *= scale
         nx = max(1, math.ceil((maxx - minx) / cell))
         ny = max(1, math.ceil((maxy - miny) / cell))
+
+    if outside_allowed is not None:
+        # Итоговая сетка (после отступа выше и, возможно, укрупнения ячейки
+        # под MAX_GRID_DIM) шире, чем ``search_box``, на котором считали
+        # outside_allowed — без пересчета клетки в этой кайме молча считались
+        # бы свободными, хотя лежат за пределами allowed_space, и найденный
+        # «обход» мог реально выходить за границу разрешенного пространства
+        # именно там (пойманная живым тестом ошибка, не гипотетическая).
+        grid_box = box(minx, miny, maxx, maxy)
+        outside_allowed = grid_box.difference(allowed_space)
+        relevant = [o for o in obstacles if o is not None and not o.is_empty and grid_box.intersects(o)]
+        if not outside_allowed.is_empty:
+            relevant.append(outside_allowed)
+        merged = unary_union(relevant) if relevant else outside_allowed
 
     prepared = prep(merged)
     inset = cell * 1e-6  # cell лишь касающийся границы препятствия не считается занятым

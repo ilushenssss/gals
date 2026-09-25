@@ -85,7 +85,10 @@ def _create_task(client, env_id, fleet_id=None, **overrides):
         "environment_id": env_id,
         "fleet_id": fleet_id or _default_fleet_id(client),
         "survey_type": "RGB",
-        "gsd_cm": "3.0",
+        # 1.9, не 3.0: 3.0 см дает высоту выше потолка 150 м, теперь
+        # ограничиваемого уже на этапе расчета геометрии съемки — см.
+        # tests/test_api_plan.py::_create_task.
+        "gsd_cm": "1.9",
         "work_date": "2026-06-15",
         "criterion_mode": "Время",
     }

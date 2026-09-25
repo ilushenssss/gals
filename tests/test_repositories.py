@@ -98,8 +98,10 @@ def _task(task_id=TASK_ID, version=1, status="Черновик"):
 
 
 def _plan(plan_id=PLAN_ID, version=1):
-    route = LineString([(37.52, 55.72), (37.55, 55.72), (37.55, 55.75)])
-    tracks = MultiLineString([[(37.52, 55.72), (37.55, 55.72)]])
+    # Z обязателен — колонки маршрута 3D (высота над рельефом, см. миграцию
+    # 0010): даже плоский план хранит третью координату.
+    route = LineString([(37.52, 55.72, 250.0), (37.55, 55.72, 250.0), (37.55, 55.75, 250.0)])
+    tracks = MultiLineString([[(37.52, 55.72, 250.0), (37.55, 55.72, 250.0)]])
     return PlanDetail(
         id=plan_id,
         task_id=TASK_ID,

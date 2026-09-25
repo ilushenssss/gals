@@ -21,6 +21,11 @@ class PlanSortiePhase(BaseModel):
     start_utc: datetime
     end_utc: datetime
     distance_m: float
+    # Средняя высота этапа над рельефом (AGL), если облет рельефа включен и
+    # рельеф удалось получить — иначе None (высота держится абсолютной,
+    # см. PlanDetail.warnings). Только AGL, не абсолютная Z: абсолютная
+    # высота — в 3D-координатах track_geojson/survey_tracks_geojson.
+    height_agl_m: Optional[float] = None
 
 
 class PlanSortie(BaseModel):
@@ -73,3 +78,9 @@ class PlanDetail(PlanSummary):
     cruise_speed_mps: float
     budget_s: float
     sorties: list[PlanSortie]
+    # Простым языком, с формулами и подставленными числами — что и как
+    # считалось, начиная с расчёта галсов, почему выбран именно этот
+    # кандидат «модель+камера» (см. plan_service.build_candidate/
+    # _pick_best_candidate). Только на полном виде плана, как sorties —
+    # в PlanSummary не нужен.
+    calculation_log: list[str] = []

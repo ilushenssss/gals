@@ -16,6 +16,18 @@ from dataclasses import dataclass
 from .errors import CameraError
 from .specs import CameraSpec, is_camera_compatible, is_height_allowed, CAMERA_SPECS
 
+# Потолок высоты полета без специального разрешения (практический предел
+# эксплуатации БВС в неклассифицированном пространстве, а не паспортный
+# потолок конкретной модели) — единственный источник значения; safety.checks
+# импортирует его отсюда для независимой повторной проверки уже готового
+# плана (в т.ч. по высоте над рельефом в каждой точке маршрута — см.
+# check_max_altitude), а не хранит свою копию. Ограничивается уже здесь, на
+# этапе расчета геометрии съемки по GSD (по запросу пользователя): кандидат
+# «модель+камера», которому для заданного GSD нужна высота выше потолка,
+# отбрасывается как нереализуемый до всего дальнейшего расчета, а не только
+# после него.
+DEFAULT_MAX_ALTITUDE_M = 150.0
+
 
 def survey_height(camera: CameraSpec, gsd_cm: float) -> float:
     """Высота съемки H (м над поверхностью) для целевого GSD (см/пиксель)."""
@@ -75,11 +87,17 @@ def plan_survey_geometry(
     gsd_cm: float,
     overlap_lateral: float = 0.7,
     overlap_forward: float = 0.7,
+    max_altitude_m: float = DEFAULT_MAX_ALTITUDE_M,
 ) -> SurveyGeometry:
     """Собирает геометрию съемки для связки «модель БВС + камера» и целевого GSD.
 
-    Бросает :class:`CameraError`, если камера не совместима с моделью или расчетная
-    высота H выходит за высотный диапазон модели (см. «Архитектура кода», раздел 4).
+    Бросает :class:`CameraError`, если камера не совместима с моделью, расчетная
+    высота H выходит за высотный диапазон модели (см. «Архитектура кода», раздел 4)
+    или выше потолка ``max_altitude_m`` (по умолчанию 150 м — практический предел
+    без специального разрешения; независимо от этого предела, ``safety.checks.
+    check_max_altitude`` все равно повторно проверяет уже готовый план — там же
+    ловится случай, когда высота над рельефом в конкретной точке маршрута
+    отклонилась от этой номинальной H из-за угла набора при облете рельефа).
     """
     if not is_camera_compatible(uav_model_key, camera_key):
         raise CameraError(f"камера «{camera_key}» не совместима с моделью «{uav_model_key}»")
@@ -90,6 +108,11 @@ def plan_survey_geometry(
     if not is_height_allowed(uav_model_key, height_m):
         raise CameraError(
             f"высота съемки {height_m:.1f} м вне высотного диапазона модели «{uav_model_key}»"
+        )
+    if height_m > max_altitude_m:
+        raise CameraError(
+            f"высота съемки {height_m:.1f} м для GSD {gsd_cm:g} см превышает допустимый потолок "
+            f"{max_altitude_m:.0f} м — задайте более крупный GSD или другую камеру"
         )
 
     swath_m = swath_width(camera, height_m)

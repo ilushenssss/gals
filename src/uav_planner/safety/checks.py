@@ -18,16 +18,24 @@ from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
+from uav_planner.camera import DEFAULT_MAX_ALTITUDE_M
 from uav_planner.schedule import daylight_window_utc_hours
 
 DEFAULT_STEP_M = 20.0
 DEFAULT_COVERAGE_TOLERANCE = 0.01
 DEFAULT_MIN_SEPARATION_M = 50.0
 DEFAULT_SEPARATION_TIME_STEP_S = 30.0
-# Потолок высоты полета без специального разрешения (практический предел
-# эксплуатации БВС в неклассифицированном пространстве, а не паспортный
-# потолок конкретной модели).
-DEFAULT_MAX_ALTITUDE_M = 150.0
+# DEFAULT_MAX_ALTITUDE_M — единственный источник в uav_planner.camera.optics
+# (там же теперь и ограничивается на этапе расчета геометрии съемки по GSD,
+# по запросу пользователя); здесь просто переиспользуем то же число для
+# независимой повторной проверки уже готового плана — не копия значения, а
+# импорт, чтобы потолок не мог разойтись между расчетом и проверкой.
+# Шаг выборки точек для проверки высоты над рельефом — заметно реже, чем
+# DEFAULT_STEP_M у остальных проверок: запрос высоты рельефа — сетевой вызов
+# (см. Ответы_экспертов_Геоскан.pdf, вопрос 13, «строить маршрут с шагом»),
+# и гонять его каждые 20 м не нужно — резкий перепад рельефа виден и на этом
+# шаге, а вот лишние сотни запросов на маршрут — не нужны.
+DEFAULT_ALTITUDE_STEP_M = 300.0
 _VIOLATION_LIMIT = 5
 
 
@@ -147,16 +155,34 @@ def check_energy(
     return CheckResult("energy", True)
 
 
-def check_max_altitude(height_m: float, limit_m: float = DEFAULT_MAX_ALTITUDE_M) -> CheckResult:
-    """Высота съемки не выше жесткого потолка (по умолчанию 150 м).
+def check_max_altitude(
+    height_m: float,
+    limit_m: float = DEFAULT_MAX_ALTITUDE_M,
+    agl_by_point: list[tuple[Point, float]] | None = None,
+) -> CheckResult:
+    """Высота полета не выше жесткого потолка (по умолчанию 150 м) — над
+    поверхностью (AGL), не абсолютная (см. Ответы_экспертов_Геоскан.pdf,
+    вопрос 13: высота задается именно над поверхностью).
 
-    v1-ограничение (честно, не молча): план сейчас летит на одной постоянной
-    высоте ``H`` весь вылет — переходы и галсы, без следования рельефу (см.
-    docs/realization/"Multiple fixed-wing UAVs collaborative coverage
-    3D.pdf", раздел 3.4 — altitude descent algorithm с цифровой моделью
-    высот, которого у нас нет). Поэтому проверка сравнивает одно число, а не
-    идет по точкам маршрута, как ``check_geozones``/``check_reachability`` —
-    по точкам здесь пока нечего различать, высота везде одна и та же."""
+    ``agl_by_point`` — независимо пересчитанная высота над рельефом в
+    точках маршрута: свой запрос к провайдеру высот (см.
+    ``services.safety_service``), не переиспользующий профиль, который уже
+    посчитал ``plan_service`` при построении маршрута — тот же принцип
+    независимости, что и у остальных проверок этого модуля. Если рельеф не
+    учтен (плана без 3D-маршрута или рельеф был недоступен и при расчете —
+    см. ``PlanDetail.warnings``) — ``None``, и проверка честно деградирует
+    до сравнения одного числа ``height_m`` (v1-ограничение: высота считается
+    одной и той же над всем вылетом)."""
+    if agl_by_point is not None:
+        violations = tuple(
+            Violation(
+                f"высота над поверхностью в точке маршрута ({agl:.0f} м) выше допустимого потолка ({limit_m:.0f} м)",
+                point,
+            )
+            for point, agl in agl_by_point
+            if agl > limit_m
+        )
+        return CheckResult("altitude", not violations, violations)
     if height_m > limit_m:
         return CheckResult("altitude", False, (
             Violation(f"высота полета ({height_m:.0f} м) выше допустимого потолка ({limit_m:.0f} м)"),

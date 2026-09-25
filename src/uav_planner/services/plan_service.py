@@ -43,7 +43,7 @@ from uav_planner.domain.errors import ConflictError, ValidationError
 from uav_planner.domain.errors import PlanInfeasibleError as _DomainPlanInfeasibleError
 from uav_planner.camera import CAMERA_SPECS, CameraError, SurveyGeometry, plan_survey_geometry
 from uav_planner.coverage import boustrophedon_cells, generate_tracks, split_long_track
-from uav_planner.fleet import FLEET_MODELS, UavModelSpec, flight_time_budget_s
+from uav_planner.fleet import DEFAULT_ENERGY_RESERVE, FLEET_MODELS, UavModelSpec, flight_time_budget_s
 from uav_planner.geometry import (
     AllowedZone,
     GeometryError,
@@ -58,11 +58,19 @@ from uav_planner.jobs.progress import CandidateProgress, ProgressReporter
 from uav_planner.logging_setup import log_context
 from uav_planner.routing import Sortie, Track, Vehicle, cluster_assign_and_route
 from uav_planner.schedule import ScheduleError, assign_timestamps
+from uav_planner.terrain import (
+    ConstantElevationProvider,
+    ElevationLookupError,
+    ElevationProvider,
+    plan_altitude_profile,
+)
 from uav_planner.visibility import find_path
+from uav_planner.config import get_settings
 
 from . import fleet_service
 from . import environment_service
 from . import task_service
+from . import terrain_service
 from uav_planner.api.schemas.plan import PlanDetail, PlanSortie, PlanSortiePhase, PlanSummary
 
 
@@ -202,18 +210,30 @@ class RouteLeg:
     coords: list[tuple[float, float]]  # UTM, включая обе граничные точки
     length_m: float
     fallback: bool = False
+    # Средняя высота этапа над рельефом (AGL) — заполняется отдельным шагом
+    # облета рельефа (``_apply_terrain_profile``), None до него/если рельеф
+    # выключен или недоступен. ``coords`` тогда остаются 2D (UTM x, y); после
+    # облета рельефа в них добавляется третья координата — абсолютная Z.
+    height_agl_m: float | None = None
 
 
 def _build_sortie_legs(
-    sortie: Sortie, start_point: Point, launch_name: str | None, restricted_zones: list[BaseGeometry]
+    sortie: Sortie,
+    start_point: Point,
+    launch_name: str | None,
+    restricted_zones: list[BaseGeometry],
+    allowed_space: BaseGeometry | None,
 ) -> list[RouteLeg]:
     """Раскладывает вылет на этапы: взлёт и перелёт до зоны задания, каждый
     галс, переходы между галсами, возврат и посадка.
 
-    Переходы обходят ``restricted_zones`` сеточным A*, если прямая их
-    пересекает. Сами галсы не проверяются — они лежат в рабочей области,
-    уже построенной без этих зон. Сумма ``length_m`` всех этапов и есть
-    фактический налёт вылета.
+    Переходы обходят ``restricted_zones`` (БПЗ/препятствия) и не выходят за
+    границу ``allowed_space`` сеточным A*, если прямая нарушает то или
+    другое — раньше проверялись только явные препятствия, и переход по
+    прямой мог срезать «залив» невыпуклой границы разрешенного пространства
+    никого не задев (см. ``visibility.astar.find_path``). Сами галсы не
+    проверяются — они лежат в рабочей области, уже построенной внутри этой
+    границы. Сумма ``length_m`` всех этапов и есть фактический налёт вылета.
     """
     legs: list[RouteLeg] = []
     current = start_point
@@ -230,7 +250,7 @@ def _build_sortie_legs(
             line_coords = line_coords[::-1]
         next_point = Point(line_coords[0])
 
-        transit = find_path(current, next_point, restricted_zones)
+        transit = find_path(current, next_point, restricted_zones, allowed_space)
         if transit.line.length > _MIN_LEG_LENGTH_M:
             label = takeoff_label if idx == 0 else f"Переход к галсу {idx + 1}"
             legs.append(RouteLeg("transit", label, list(transit.line.coords), transit.line.length, transit.fallback))
@@ -238,11 +258,53 @@ def _build_sortie_legs(
         legs.append(RouteLeg("survey", f"Галс {idx + 1}", line_coords, LineString(line_coords).length))
         current = Point(line_coords[-1])
 
-    transit = find_path(current, start_point, restricted_zones)
+    transit = find_path(current, start_point, restricted_zones, allowed_space)
     if transit.line.length > _MIN_LEG_LENGTH_M:
         legs.append(RouteLeg("transit", landing_label, list(transit.line.coords), transit.line.length, transit.fallback))
 
     return legs
+
+
+def _apply_terrain_profile(
+    legs: list[RouteLeg],
+    start_point: Point,
+    projector: Projector,
+    target_agl_m: float,
+    climb_angle_deg: float,
+    provider: ElevationProvider,
+) -> list[RouteLeg]:
+    """Встраивает высоту над рельефом в уже построенные этапы вылета.
+
+    Высоты запрашиваются только в естественных точках маршрута — границах
+    этапов (см. ``uav_planner.terrain``), а не на каждой точке A*-обхода
+    зоны. Внутри этапа Z интерполируется линейно по пройденному расстоянию
+    между его двумя концами — этого достаточно: рельеф не меняется резко на
+    длине одного перехода/галса, а угол набора уже ограничил сам целевой
+    профиль на границах.
+    """
+    keypoints_utm = [start_point] + [Point(leg.coords[-1][0], leg.coords[-1][1]) for leg in legs]
+    keypoints_wgs84 = [(p.x, p.y) for p in (projector.to_wgs84(kp) for kp in keypoints_utm)]
+    distances_m = [leg.length_m for leg in legs]
+
+    z_at_keypoints = plan_altitude_profile(keypoints_wgs84, distances_m, target_agl_m, climb_angle_deg, provider)
+    ground_at_keypoints = provider.elevations(keypoints_wgs84)
+
+    new_legs: list[RouteLeg] = []
+    for i, leg in enumerate(legs):
+        z_start, z_end = z_at_keypoints[i], z_at_keypoints[i + 1]
+        coords_2d = [(x, y) for x, y, *_ in leg.coords]
+        cumulative = [0.0]
+        for a, b in zip(coords_2d, coords_2d[1:]):
+            cumulative.append(cumulative[-1] + Point(a).distance(Point(b)))
+        total = cumulative[-1] or 1.0
+        coords_3d = [
+            (x, y, z_start + (z_end - z_start) * (c / total)) for (x, y), c in zip(coords_2d, cumulative)
+        ]
+        agl_m = ((z_start + z_end) / 2.0) - ((ground_at_keypoints[i] + ground_at_keypoints[i + 1]) / 2.0)
+        new_legs.append(
+            RouteLeg(leg.kind, leg.label, coords_3d, leg.length_m, leg.fallback, height_agl_m=agl_m)
+        )
+    return new_legs
 
 
 @dataclass
@@ -260,9 +322,22 @@ class _Candidate:
     j1_s: float
     j2_s: float
     warnings: list[str]
+    log: list[str]
 
 
-def _pick_best_candidate(candidates: list[_Candidate], criterion_alpha: float) -> _Candidate:
+def _fmt_hm(seconds: float) -> str:
+    """Секунды -> «Nч Mмин» для истории расчета — короче и понятнее оператору,
+    чем сырые секунды."""
+    total_min = round(seconds / 60.0)
+    hours, minutes = divmod(int(total_min), 60)
+    return f"{hours} ч {minutes} мин" if hours else f"{minutes} мин"
+
+
+def _candidate_label(c: _Candidate) -> str:
+    return f"{c.model.name} + камера {CAMERA_SPECS[c.camera_key].name}"
+
+
+def _pick_best_candidate(candidates: list[_Candidate], criterion_alpha: float, criterion_mode: str) -> _Candidate:
     """ПЛН.ФТ.2: побеждает кандидат, минимизирующий критерий задачи —
     нормированная взвешенная сумма ``J = α·J1/J1* + (1-α)·J2/J2*``.
 
@@ -270,10 +345,19 @@ def _pick_best_candidate(candidates: list[_Candidate], criterion_alpha: float) -
     теоретические оптимумы. При единственном кандидате сравнивать не с чем,
     деление не выполняется вовсе. ``criterion_alpha`` уже однозначно кодирует
     режим критерия (1.0 «Время», 0.0 «Налет», значение оператора для
-    «Компромисс»), поэтому режим отдельно не нужен.
+    «Компромисс»), поэтому режим отдельно не нужен для самого расчета —
+    только для фразы истории расчета (``criterion_mode``).
+
+    Дописывает в лог выигравшего кандидата финальную фразу — сравнение (или
+    «единственный кандидат», если сравнивать не с чем): история расчета
+    должна объяснять именно ВЫБОР, не только числа по кандидатам.
     """
     if len(candidates) == 1:
-        return candidates[0]
+        winner = candidates[0]
+        winner.log.append(
+            f"Единственный подходящий кандидат — сравнение не требуется, выбран «{_candidate_label(winner)}»."
+        )
+        return winner
 
     j1_best = min(c.j1_s for c in candidates)
     j2_best = min(c.j2_s for c in candidates)
@@ -283,7 +367,13 @@ def _pick_best_candidate(candidates: list[_Candidate], criterion_alpha: float) -
         j2_term = (c.j2_s / j2_best) if j2_best > 0 else 0.0
         return criterion_alpha * j1_term + (1 - criterion_alpha) * j2_term
 
-    return min(candidates, key=score)
+    winner = min(candidates, key=score)
+    winner.log.append(
+        f"Сравнены {len(candidates)} кандидата(ов) по критерию «{criterion_mode}» "
+        f"(J = α·J1/J1* + (1−α)·J2/J2*, α = {criterion_alpha:.2f}); выбран «{_candidate_label(winner)}» — "
+        f"у него наименьшее значение J ({score(winner):.3f}) среди посчитанных."
+    )
+    return winner
 
 
 def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanSummary:
@@ -317,6 +407,18 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         raise PlanInfeasibleError(
             f"нет готовых БВС с нагрузкой, совместимой с типом съемки «{task.survey_type}»"
         )
+
+    # История расчета (простым языком, см. docs/trebovania/ и запрос
+    # оператора) — начинается здесь, до самой геометрии, и продолжается
+    # внутри build_candidate по мере реальных вычислений (не отдельным
+    # пересчетом «для текста», а той же переменной, что уже участвует в
+    # расчете).
+    intro_log = [
+        f"Задача «{task.name}»: обстановка «{task.environment_name}», парк «{task.fleet_name}», "
+        f"тип съемки {task.survey_type}, GSD {task.gsd_cm:g} см.",
+        f"Подходящих по камере групп «модель+камера»: {len(groups)} ("
+        + ", ".join(f"{FLEET_MODELS[mk].name} + камера {CAMERA_SPECS[ck].name}" for mk, ck in groups) + ").",
+    ]
 
     area_geom = shape(task.area)
     airspace_feats = _valid_features(env, "airspace")
@@ -369,15 +471,39 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
     window_start_hour = _time_to_hours(task.window_start) or 0.0
     window_end_hour = _time_to_hours(task.window_end) or 24.0
 
+    # Один провайдер на весь расчет (все кандидаты) — его кэш по координатам
+    # тогда работает и между кандидатами, не только внутри одного. Профиль
+    # высоты строится всегда (иначе колонка геометрии в БД была бы то 2D, то
+    # 3D) — если рельеф выключен/недоступен, честный фолбэк на постоянную
+    # высоту (Z = целевая высота съемки, как было до этой функции), а не
+    # смешение размерностей.
+    real_elevation_provider = terrain_service.default_elevation_provider()
+    settings = get_settings()
+
     def build_candidate(
         model_key: str, camera_key: str, instances: list, tick: CandidateProgress
     ) -> _Candidate:
         model = FLEET_MODELS[model_key]
+        camera = CAMERA_SPECS[camera_key]
+        log: list[str] = []
         tick.stage("Геометрия съемки", 0.0)
         try:
             survey_geometry = plan_survey_geometry(model_key, camera_key, task.gsd_cm)
         except CameraError as exc:
             raise PlanInfeasibleError(str(exc)) from exc
+
+        gsd_m = task.gsd_cm / 100.0
+        log.append(
+            f"Высота съемки по GSD (камера «{camera.name}»): "
+            f"H = GSD·f·N_w/s_w = {gsd_m:.3f}·{camera.focal_length_mm:.1f}·{camera.frame_width_px}/"
+            f"{camera.sensor_width_mm:.1f} = {survey_geometry.height_m:.1f} м."
+        )
+        log.append(
+            "Полоса захвата и шаг между галсами: "
+            f"B = H·s_w/f = {survey_geometry.height_m:.1f}·{camera.sensor_width_mm:.1f}/{camera.focal_length_mm:.1f} "
+            f"= {survey_geometry.swath_m:.1f} м; d = B·(1 − q_попер) = {survey_geometry.swath_m:.1f}·(1 − 0.7) "
+            f"= {survey_geometry.track_spacing_m:.1f} м."
+        )
 
         # Зоны для обхода на переходах — те же контуры, что compute_working_area
         # вычитает из рабочей области. Высота своя у каждого кандидата (зависит
@@ -386,6 +512,15 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         restricted_zones: list[BaseGeometry] = [zone.footprint() for zone in no_fly_zones] + [
             obstacle.footprint() for obstacle in obstacles if obstacle.is_hole_at(survey_geometry.height_m)
         ]
+        # Тот же фильтр по высоте/активности, что compute_working_area
+        # использует при пересечении area∩allowed — передаём A* на переходах,
+        # чтобы он не выпускал маршрут за границу разрешенного пространства
+        # (раньше проверялись только явные препятствия, см. _build_sortie_legs).
+        active_allowed = [
+            zone.polygon for zone in allowed_zones
+            if zone.height.contains(survey_geometry.height_m) and zone.is_active_at()
+        ]
+        allowed_union = unary_union(active_allowed) if active_allowed else None
 
         tick.stage("Построение рабочей области", 0.10)
         try:
@@ -396,10 +531,15 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
             raise PlanInfeasibleError(str(exc)) from exc
         if working_area.is_empty:
             raise PlanInfeasibleError("рабочая область пуста на высоте съемки — нет свободного места для галсов")
+        log.append(
+            "Рабочая область (пересечение области облета и разрешенного пространства, минус бесполетные "
+            f"зоны и препятствия выше {survey_geometry.height_m:.1f} м): площадь {working_area.area / 1e6:.2f} км²."
+        )
 
         tick.stage("Декомпозиция области", 0.20)
         cells = boustrophedon_cells(working_area)
         max_route_m = model.max_route_km * 1000.0 if model.max_route_km else float("inf")
+        log.append(f"Область разбита на {len(cells)} ячейк(и) без внутренних дыр.")
 
         raw_tracks: list[LineString] = []
         for cell_index, cell in enumerate(cells):
@@ -408,10 +548,19 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
                 raw_tracks.extend(split_long_track(track, max_route_m))
         if not raw_tracks:
             raise PlanInfeasibleError("рабочая область слишком мала для построения ни одного галса")
+        log.append(
+            f"В ячейках построено {len(raw_tracks)} галс(ов) общей длиной "
+            f"{sum(t.length for t in raw_tracks) / 1000.0:.1f} км с шагом {survey_geometry.track_spacing_m:.1f} м."
+        )
 
         wind_speed = task.wind_speed_ms or 0.0
         cruise_speed = max(model.speed_ms.max_ms - wind_speed, MIN_EFFECTIVE_SPEED_MPS)
         budget_s = flight_time_budget_s(model)
+        log.append(
+            "Энергобюджет вылета: T_бюдж = T_max·(1−η)·(1−m_ман) = "
+            f"{model.max_flight_time_min * 60:.0f}·(1−{DEFAULT_ENERGY_RESERVE:.2f})·(1−0) = {budget_s:.0f} с "
+            f"({budget_s / 60.0:.1f} мин)."
+        )
 
         vehicles = [
             Vehicle(
@@ -432,18 +581,70 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         # пересчитывается по нему ДО расписания: световой день обязан
         # укладывать настоящую длительность, а не приблизительную.
         routing_result = cluster_assign_and_route(track_objs, vehicles)
+        n_sorties_raw = sum(len(sorties) for sorties in routing_result.sorties_by_vehicle.values())
+        log.append(
+            f"Галсы распределены между {len(vehicles)} БВС парка (модель «{model.name}», камера «{camera.name}»), "
+            "переходы между ними и до площадок обойдены вокруг запретных зон и препятствий (сеточный A*); "
+            f"маршруты разбиты на {n_sorties_raw} вылет(ов) по энергобюджету."
+        )
+        if routing_result.unassigned_tracks:
+            log.append(
+                f"{len(routing_result.unassigned_tracks)} галс(ов) не поместились в бюджет вылета ни одного "
+                "борта — остались нераспределёнными."
+            )
 
         sortie_legs: dict[int, list[RouteLeg]] = {}
         any_transit_fallback = False
+        terrain_unavailable_reason: str | None = None
+        terrain_applied = False
+        active_provider: ElevationProvider = (
+            real_elevation_provider if real_elevation_provider is not None else ConstantElevationProvider(0.0)
+        )
         for vehicle_index, vehicle in enumerate(vehicles):
             tick.span("Обход зон на переходах", vehicle_index, len(vehicles), (0.55, 0.80))
             launch_name = launch_name_by_vehicle[vehicle.id]
             for sortie in routing_result.sorties_by_vehicle.get(vehicle.id, []):
-                legs = _build_sortie_legs(sortie, vehicle.launch_point, launch_name, restricted_zones)
+                legs = _build_sortie_legs(sortie, vehicle.launch_point, launch_name, restricted_zones, allowed_union)
                 sortie.flight_time_s = sum(leg.length_m for leg in legs) / cruise_speed
-                sortie_legs[id(sortie)] = legs
                 if any(leg.fallback for leg in legs):
                     any_transit_fallback = True
+
+                # Высотный профиль строится всегда — если рельеф выключен
+                # или стал недоступен, используем плоский фолбэк (Z = целевая
+                # высота съемки, как было до этой функции): так координаты
+                # маршрута всегда 3D одинаково, а не то 2D, то 3D в
+                # зависимости от результата запроса к внешнему сервису.
+                # Длина этапов (и налёт) не меняется (v1-упрощение, без учета
+                # наклонной дальности) — меняется только высота Z.
+                try:
+                    legs = _apply_terrain_profile(
+                        legs, vehicle.launch_point, projector,
+                        survey_geometry.height_m, settings.terrain_climb_angle_deg, active_provider,
+                    )
+                    if active_provider is real_elevation_provider:
+                        terrain_applied = True
+                except ElevationLookupError as exc:
+                    if active_provider is real_elevation_provider:
+                        terrain_unavailable_reason = str(exc)
+                        log.warning(
+                            "рельеф недоступен — высота остаётся абсолютной",
+                            extra={"model_key": model_key, "camera_key": camera_key, "reason": terrain_unavailable_reason},
+                        )
+                        active_provider = ConstantElevationProvider(0.0)
+                    legs = _apply_terrain_profile(
+                        legs, vehicle.launch_point, projector,
+                        survey_geometry.height_m, settings.terrain_climb_angle_deg, active_provider,
+                    )
+
+                sortie_legs[id(sortie)] = legs
+
+        if terrain_unavailable_reason is not None:
+            log.append(f"Рельеф недоступен ({terrain_unavailable_reason}) — высота держится абсолютной.")
+        elif terrain_applied:
+            log.append(
+                f"Рельеф учтён: высота над поверхностью держится {survey_geometry.height_m:.1f} м с округлением "
+                f"по углу набора/снижения {settings.terrain_climb_angle_deg:.0f}°, данные — Open Topo Data."
+            )
 
         plan_sorties: list[PlanSortie] = []
         total_flight_s = 0.0
@@ -476,7 +677,7 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
                     phase_end = cursor + timedelta(seconds=leg.length_m / cruise_speed)
                     phases.append(PlanSortiePhase(
                         label=leg.label, kind=leg.kind, start_utc=cursor, end_utc=phase_end,
-                        distance_m=leg.length_m,
+                        distance_m=leg.length_m, height_agl_m=leg.height_agl_m,
                     ))
                     cursor = phase_end
                 if phases:
@@ -487,9 +688,11 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
 
                 route_line_utm = LineString(route_coords)
                 route_line_wgs84 = projector.to_wgs84(route_line_utm)
-                survey_tracks_wgs84 = projector.to_wgs84(
-                    MultiLineString([t.geometry for t in sched.sortie.tracks])
-                )
+                # Из этапов вылета (не из исходной 2D-геометрии галсов) —
+                # так съемочные галсы несут ту же высоту Z, что и облет
+                # рельефа уже встроил в маршрут выше.
+                survey_leg_coords = [leg.coords for leg in legs if leg.kind == "survey"]
+                survey_tracks_wgs84 = projector.to_wgs84(MultiLineString(survey_leg_coords))
                 # Длина всего маршрута (переходы в обход зон + галсы), а не
                 # только галсов: так честнее относительно карты.
                 distance_m = route_line_utm.length
@@ -514,6 +717,17 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         j1_s = (plan_end - plan_start).total_seconds() if plan_start and plan_end else 0.0
         j2_s = total_flight_s + SORTIE_PENALTY_S * len(plan_sorties)
 
+        if plan_start and plan_end:
+            log.append(
+                f"Расписание с учетом светового дня на {task.work_date.isoformat()} для координат "
+                f"({lat:.2f}, {lon:.2f}): первый вылет в {plan_start:%H:%M} UTC, "
+                f"последний закончится в {plan_end:%H:%M} UTC."
+            )
+        log.append(
+            f"Итог по кандидату «{model.name} + камера {camera.name}»: "
+            f"J1 (общее время) = {_fmt_hm(j1_s)}, J2 (налет) = {_fmt_hm(j2_s)}."
+        )
+
         warnings: list[str] = []
         if routing_result.unassigned_tracks:
             warnings.append(
@@ -526,11 +740,16 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
                 "(слишком узкий проход для разрешения сетки поиска) — использована прямая линия; "
                 "пересечение проверит модуль «Проверка безопасности»"
             )
+        if terrain_unavailable_reason is not None:
+            warnings.append(
+                f"рельеф недоступен ({terrain_unavailable_reason}) — высота держится абсолютной, "
+                "не над поверхностью"
+            )
 
         return _Candidate(
             model_key=model_key, camera_key=camera_key, model=model, survey_geometry=survey_geometry,
             cruise_speed=cruise_speed, budget_s=budget_s, plan_sorties=plan_sorties,
-            j1_s=j1_s, j2_s=j2_s, warnings=warnings,
+            j1_s=j1_s, j2_s=j2_s, warnings=warnings, log=log,
         )
 
     candidates: list[_Candidate] = []
@@ -548,7 +767,7 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
             + "; ".join(failures)
         )
 
-    best = _pick_best_candidate(candidates, task.criterion_alpha)
+    best = _pick_best_candidate(candidates, task.criterion_alpha, task.criterion_mode)
 
     progress.stage("save")
     plan_id = str(uuid.uuid4())
@@ -573,6 +792,7 @@ def create_plan(task_id: str, progress: ProgressReporter | None = None) -> PlanS
         cruise_speed_mps=best.cruise_speed,
         budget_s=best.budget_s,
         sorties=best.plan_sorties,
+        calculation_log=intro_log + best.log,
     )
     repositories.plans.add(detail)
     task_service.mark_calculated(task.id)

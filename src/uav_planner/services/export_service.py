@@ -13,12 +13,12 @@ WGS-84, как их хранит ``plan_service``) — доступность э
 ``PlanSortiePhase``, а не наугад; текст самого требования не правился задним
 числом.
 
-Другое v1-ограничение: ни маршрут вылета, ни этапы не хранят высотный
-профиль (взлет/набор/снижение) — вся расчетная модель ведет высоту съемки
-как одну константу на вылет (``PlanDetail.height_m``, см. также
-``uav_planner.geometry.Obstacle.is_hole_at``). Поэтому во всех экспортных
-геометриях (кроме «Зоны покрытия» — она проекция на землю) третья координата
-— это ``plan.height_m``, а не honest altitude profile.
+Третья координата экспортных геометрий (кроме «Зоны покрытия» — она проекция
+на землю, всегда 0) — реальная высота над рельефом, если облет рельефа
+включен и рельеф получен (``uav_planner.terrain``, см.
+``plan_service._apply_terrain_profile``), иначе честный плоский фолбэк
+(``PlanDetail.height_m``, см. ``PlanDetail.warnings``) — маршрут и галсы уже
+хранятся 3D, экспорт только переносит эту высоту дальше, не выдумывает её.
 """
 
 from __future__ import annotations
@@ -136,9 +136,12 @@ def to_geojson(plan: PlanDetail, uav_id: str) -> dict:
                 "flight_time_s": sortie.flight_time_s, "distance_m": sortie.distance_m,
                 "speed_mps": plan.cruise_speed_mps, "altitude_m": plan.height_m,
             },
+            # Маршрут уже 3D (реальная высота над рельефом или плоский
+            # фолбэк, см. plan_service._apply_terrain_profile) — третья
+            # координата не достраивается искусственно.
             "geometry": {
                 "type": sortie.track_geojson["type"],
-                "coordinates": _add_altitude(sortie.track_geojson["coordinates"], plan.height_m),
+                "coordinates": sortie.track_geojson["coordinates"],
             },
         })
         features.append({
@@ -149,7 +152,7 @@ def to_geojson(plan: PlanDetail, uav_id: str) -> dict:
             },
             "geometry": {
                 "type": sortie.survey_tracks_geojson["type"],
-                "coordinates": _add_altitude(sortie.survey_tracks_geojson["coordinates"], plan.height_m),
+                "coordinates": sortie.survey_tracks_geojson["coordinates"],
             },
         })
         for i, kp in enumerate(_key_points(sortie, projector)):
@@ -159,7 +162,7 @@ def to_geojson(plan: PlanDetail, uav_id: str) -> dict:
                     "type": "Ключевая точка", "uav_id": sortie.uav_id, "sortie_index": sortie.sortie_index,
                     "sequence": i, "label": kp["label"], "kind": kp["kind"], "utc": kp["utc"].isoformat(),
                 },
-                "geometry": {"type": "Point", "coordinates": [kp["point"].x, kp["point"].y, plan.height_m]},
+                "geometry": {"type": "Point", "coordinates": [kp["point"].x, kp["point"].y, kp["point"].z]},
             })
         coverage = _coverage_polygon(sortie, plan.swath_m, projector)
         if coverage is not None and not coverage.is_empty:
@@ -193,8 +196,12 @@ def to_geojson(plan: PlanDetail, uav_id: str) -> dict:
     }
 
 
-def _kml_coords(coords: list[tuple[float, float]], alt: float) -> str:
-    return " ".join(f"{lon:.7f},{lat:.7f},{alt:.1f}" for lon, lat in coords)
+def _kml_coords(coords: list[tuple[float, float, float]]) -> str:
+    """``coords`` уже 3D — третья координата - настоящая высота над рельефом
+    (или честный плоский фолбэк), поэтому ``altitudeMode=absolute`` (не
+    ``relativeToGround``: тот режим ждал бы AGL, а мы отдаём абсолютную
+    высоту, встроенную еще в ``plan_service``)."""
+    return " ".join(f"{lon:.7f},{lat:.7f},{alt:.1f}" for lon, lat, alt in coords)
 
 
 def _iso(dt: datetime) -> str:
@@ -211,7 +218,8 @@ def _kml_extended_data(fields: dict[str, Any]) -> str:
 
 def to_kml(plan: PlanDetail, uav_id: str) -> str:
     """ЭКС.ФТ.7-8: KML ``Document -> Folder(БВС) -> Folder(вылет)`` с
-    Placemark «Маршрут» (LineString, ``altitudeMode=relativeToGround``,
+    Placemark «Маршрут» (LineString, ``altitudeMode=absolute`` — реальная
+    высота над рельефом уже встроена в маршрут, не относительная,
     ``TimeSpan``), Placemark «Галсы» (``MultiGeometry`` линий) и по одному
     Placemark на каждую ключевую точку (``Point``, ``TimeStamp``), этап/
     скорость/высота — в ``ExtendedData``."""
@@ -235,30 +243,30 @@ def to_kml(plan: PlanDetail, uav_id: str) -> str:
                 "uav_id": uav_id, "speed_mps": round(plan.cruise_speed_mps, 2),
                 "altitude_m": round(plan.height_m, 1),
             })
-            + "<LineString><altitudeMode>relativeToGround</altitudeMode>"
-            f"<coordinates>{_kml_coords(route_coords, plan.height_m)}</coordinates></LineString>"
+            + "<LineString><altitudeMode>absolute</altitudeMode>"
+            f"<coordinates>{_kml_coords(route_coords)}</coordinates></LineString>"
             "</Placemark>"
         )
 
         survey_lines = sortie.survey_tracks_geojson["coordinates"]
         multi = "".join(
-            "<LineString><altitudeMode>relativeToGround</altitudeMode>"
-            f"<coordinates>{_kml_coords(line, plan.height_m)}</coordinates></LineString>"
+            "<LineString><altitudeMode>absolute</altitudeMode>"
+            f"<coordinates>{_kml_coords(line)}</coordinates></LineString>"
             for line in survey_lines
         )
         parts.append(f"<Placemark><name>Галсы</name><MultiGeometry>{multi}</MultiGeometry></Placemark>")
 
         for kp in _key_points(sortie, projector):
-            lon, lat = kp["point"].x, kp["point"].y
+            lon, lat, alt = kp["point"].x, kp["point"].y, kp["point"].z
             parts.append(
                 f"<Placemark><name>{xml_escape(kp['label'])}</name>"
                 f"<TimeStamp><when>{_iso(kp['utc'])}</when></TimeStamp>"
                 + _kml_extended_data({
                     "этап": kp["kind"], "speed_mps": round(plan.cruise_speed_mps, 2),
-                    "altitude_m": round(plan.height_m, 1),
+                    "altitude_m": round(alt, 1),
                 })
-                + "<Point><altitudeMode>relativeToGround</altitudeMode>"
-                f"<coordinates>{lon:.7f},{lat:.7f},{plan.height_m:.1f}</coordinates></Point>"
+                + "<Point><altitudeMode>absolute</altitudeMode>"
+                f"<coordinates>{lon:.7f},{lat:.7f},{alt:.1f}</coordinates></Point>"
                 "</Placemark>"
             )
         parts.append("</Folder>")
