@@ -314,3 +314,15 @@ def test_separation_accounts_for_staggered_start():
         SortieTrack("B", route, t0 + timedelta(seconds=60), t0 + timedelta(seconds=360), cruise_speed_mps=10),
     ]
     assert check_separation(sorties, min_separation_m=50).passed
+
+
+def test_coverage_uses_each_track_own_swath():
+    # Смешанный парк: галсы разных моделей сняты с разной высоты. Широкая
+    # полоса одного галса не должна «растягиваться» на узкий соседний.
+    working_area = box(0, 0, 100, 40)
+    tracks = [LineString([(0, 10), (100, 10)]), LineString([(0, 30), (100, 30)])]
+
+    assert check_coverage(tracks, working_area, swath_m=[20, 20]).passed
+    assert not check_coverage(tracks, working_area, swath_m=[20, 6]).passed
+    with pytest.raises(ValueError):
+        check_coverage(tracks, working_area, swath_m=[20])

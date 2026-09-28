@@ -138,6 +138,15 @@ class PlanSortie(Base):
     # структура целиком задаётся расчётом и будет меняться, поэтому jsonb,
     # а не таблица.
     phases: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    # Параметры съемки вылета — в смешанном парке свои у каждой модели.
+    # NULL у планов, рассчитанных до миграции 0013: тогда действуют
+    # параметры плана.
+    model_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    camera_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    height_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    swath_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cruise_speed_mps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    budget_s: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     plan: Mapped[Plan] = relationship(back_populates="sorties")
 

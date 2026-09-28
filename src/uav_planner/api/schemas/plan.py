@@ -40,6 +40,16 @@ class PlanSortie(BaseModel):
     track_geojson: dict[str, Any]  # LineString, WGS-84 — маршрут вылета целиком (галсы + переходы), для карты
     survey_tracks_geojson: dict[str, Any]  # MultiLineString, WGS-84 — только галсы, без переходов (для проверки покрытия)
     phases: list[PlanSortiePhase] = []
+    # Параметры съемки именно этого вылета. В смешанном парке у вылетов
+    # разных моделей они разные, и проверка безопасности и выгрузка берут их
+    # отсюда. None — план рассчитан до появления полей: действуют параметры
+    # карточки плана (PlanDetail).
+    model_key: Optional[str] = None
+    camera_key: Optional[str] = None
+    height_m: Optional[float] = None
+    swath_m: Optional[float] = None
+    cruise_speed_mps: Optional[float] = None
+    budget_s: Optional[float] = None
 
 
 class PlanSummary(BaseModel):

@@ -129,6 +129,14 @@ def sortie_label(sortie) -> str:
     return f"{sortie.uav_id} · вылет {sortie.sortie_index + 1}"
 
 
+def _sortie_param(sortie, plan: PlanDetail, name: str):
+    """Параметр съемки вылета (высота, полоса, скорость, бюджет): у вылетов
+    смешанного парка он свой у каждой модели. Планы, рассчитанные до
+    появления полей в вылете, берут его из карточки плана."""
+    value = getattr(sortie, name, None)
+    return getattr(plan, name) if value is None else value
+
+
 def _violation_out(v: Violation, projector: Projector, violation_id: str) -> ViolationOut:
     """Нарушение ядра -> нарушение контракта API: точка перепроецируется из
     UTM в WGS-84, чтобы интерфейс мог поставить маркер на карту."""
@@ -299,10 +307,14 @@ def _run_checks(
     ]
 
     # Разрешенное пространство — только зоны, чей диапазон высот включает
-    # высоту полета плана (раньше объединялись все зоны без учета высоты, и
-    # полет над потолком зоны считался разрешенным).
-    height_allowed_zones = [z for z in allowed_zones if z.height.contains(plan.height_m)]
-    obstacle_footprints = [o.footprint() for o in obstacles if o.is_hole_at(plan.height_m)]
+    # высоту полета вылета (раньше объединялись все зоны без учета высоты, и
+    # полет над потолком зоны считался разрешенным). Высота своя у вылетов
+    # разных моделей смешанного парка.
+    def height_allowed_zones(height_m: float) -> list[AllowedZone]:
+        return [z for z in allowed_zones if z.height.contains(height_m)]
+
+    def obstacle_footprints(height_m: float) -> list[BaseGeometry]:
+        return [o.footprint() for o in obstacles if o.is_hole_at(height_m)]
     landing_points = [projector.to_utm(shape(f["geometry"])) for f in launch_feats + reserve_feats]
 
     lat, lon = area_geom.centroid.y, area_geom.centroid.x
@@ -317,16 +329,22 @@ def _run_checks(
     daylight_results: list[tuple[str | None, CheckResult]] = []
     sortie_tracks: list[SortieTrack] = []
     all_survey_tracks_utm: list[BaseGeometry] = []
+    all_survey_swaths_m: list[float] = []
     altitude_sample_points_utm: list[Point] = []
+    heights_m: set[float] = {plan.height_m} if not plan.sorties else set()
 
     for sortie in plan.sorties:
         progress.tick()
         label = sortie_label(sortie)
+        height_m = _sortie_param(sortie, plan, "height_m")
+        speed_mps = _sortie_param(sortie, plan, "cruise_speed_mps")
+        budget_s = _sortie_param(sortie, plan, "budget_s")
+        heights_m.add(height_m)
         route_utm = projector.to_utm(shape(sortie.track_geojson))
         survey_utm = projector.to_utm(shape(sortie.survey_tracks_geojson))
-        all_survey_tracks_utm.extend(
-            list(survey_utm.geoms) if survey_utm.geom_type == "MultiLineString" else [survey_utm]
-        )
+        survey_lines = list(survey_utm.geoms) if survey_utm.geom_type == "MultiLineString" else [survey_utm]
+        all_survey_tracks_utm.extend(survey_lines)
+        all_survey_swaths_m.extend([_sortie_param(sortie, plan, "swath_m")] * len(survey_lines))
         if route_utm.has_z:
             altitude_sample_points_utm.extend(discretize(route_utm, DEFAULT_ALTITUDE_STEP_M))
 
@@ -334,11 +352,12 @@ def _run_checks(
             z.footprint() for z in no_fly_zones if z.is_active_during(sortie.start_utc, sortie.end_utc)
         ]
         geozone_results.append(
-            (label, check_geozones(route_utm, no_fly_footprints, obstacle_footprints))
+            (label, check_geozones(route_utm, no_fly_footprints, obstacle_footprints(height_m)))
         )
 
         sortie_allowed = [
-            z.polygon for z in height_allowed_zones if z.is_active_throughout(sortie.start_utc, sortie.end_utc)
+            z.polygon for z in height_allowed_zones(height_m)
+            if z.is_active_throughout(sortie.start_utc, sortie.end_utc)
         ]
         if not allowed_zones:
             airspace_results.append((None, CheckResult("airspace", False, (
@@ -350,7 +369,7 @@ def _run_checks(
         elif not sortie_allowed:
             airspace_results.append((label, CheckResult("airspace", False, (
                 Violation(
-                    f"на высоте {plan.height_m:.0f} м в интервале вылета не действует ни одна зона "
+                    f"на высоте {height_m:.0f} м в интервале вылета не действует ни одна зона "
                     "разрешенного воздушного пространства",
                     Point(route_utm.coords[0]),
                 ),
@@ -359,11 +378,11 @@ def _run_checks(
             airspace_results.append((label, check_allowed_space(route_utm, unary_union(sortie_allowed))))
 
         energy_results.append(
-            (label, check_energy(route_utm.length, plan.cruise_speed_mps, plan.budget_s, route=route_utm))
+            (label, check_energy(route_utm.length, speed_mps, budget_s, route=route_utm))
         )
         reachability_results.append((
             label,
-            check_reachability(route_utm, landing_points, plan.cruise_speed_mps, plan.budget_s),
+            check_reachability(route_utm, landing_points, speed_mps, budget_s),
         ))
         daylight_results.append((
             label,
@@ -376,7 +395,7 @@ def _run_checks(
         sortie_tracks.append(SortieTrack(
             uav_id=sortie.uav_id, route=route_utm,
             start_utc=sortie.start_utc, end_utc=sortie.end_utc,
-            cruise_speed_mps=plan.cruise_speed_mps,
+            cruise_speed_mps=speed_mps,
         ))
 
     # Каждый вылет выше сверен со световым днем своих суток — этого мало:
@@ -394,12 +413,16 @@ def _run_checks(
                 ),
             ))))
 
+    # Рабочая область на каждой высоте, с которой снимает план: в смешанном
+    # парке модель снимает свою часть со своей высоты, и место, недоступное
+    # на одной высоте (препятствие выше нее), может быть снято с другой.
     try:
-        working_area = compute_working_area(
-            projector.to_utm(area_geom), allowed_zones, no_fly_zones, obstacles, plan.height_m
-        )
+        area_utm = projector.to_utm(area_geom)
+        working_area = unary_union([
+            compute_working_area(area_utm, allowed_zones, no_fly_zones, obstacles, h) for h in sorted(heights_m)
+        ])
         coverage_result = check_coverage(
-            all_survey_tracks_utm, working_area, plan.swath_m, tolerance=settings.coverage_tolerance
+            all_survey_tracks_utm, working_area, all_survey_swaths_m, tolerance=settings.coverage_tolerance
         )
     except GeometryError as exc:
         coverage_result = CheckResult(
@@ -409,8 +432,9 @@ def _run_checks(
     progress.tick()
     separation_result = check_separation(sortie_tracks, min_separation_m=settings.separation_distance_m)
     agl_by_point = _agl_by_point(altitude_sample_points_utm, projector, progress)
-    altitude_result = check_max_altitude(plan.height_m, agl_by_point=agl_by_point)
-    max_agl_m = max([plan.height_m] + [agl for _, agl in (agl_by_point or [])])
+    nominal_height_m = max(heights_m)
+    altitude_result = check_max_altitude(nominal_height_m, agl_by_point=agl_by_point)
+    max_agl_m = max([nominal_height_m] + [agl for _, agl in (agl_by_point or [])])
 
     return _with_recommendations([
         _combine("geozones", geozone_results, projector),

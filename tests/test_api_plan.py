@@ -474,3 +474,64 @@ def test_work_splits_across_two_vehicles_at_opposite_ends_of_the_area(client):
     # Балансировка узкого места не гарантирует идеальное равенство, но не
     # должна оставлять один БВС почти без работы на фоне другого.
     assert min(totals.values()) > 0.3 * max(totals.values())
+
+
+def test_mixed_fleet_splits_the_area_between_models_when_that_is_faster(client):
+    # Один Геоскан 201 на западе и три Gemini на востоке, область ~4.4×2.2 км.
+    # Порознь: 201 — около 1 ч 44 мин, три Gemini — почти 3 ч; вместе, поделив
+    # область, быстрее обоих. Раньше модели в одной задаче не смешивались.
+    features = [
+        {"type": "Feature", "properties": {"layer": "airspace", "h_min": 0, "h_max": 300},
+         "geometry": {"type": "Polygon", "coordinates": square_coords(37.50, 55.65, 0.2, 0.1)}},
+        {"type": "Feature", "properties": {"layer": "launch_site", "name": "ВПП Запад"},
+         "geometry": {"type": "Point", "coordinates": [37.55, 55.70]}},
+        {"type": "Feature", "properties": {"layer": "launch_site", "name": "ВПП Восток"},
+         "geometry": {"type": "Point", "coordinates": [37.62, 55.70]}},
+    ]
+    resp = client.post(
+        "/api/environments", data={"name": "Две площадки"},
+        files={"file": ("scene.geojson", io.BytesIO(json.dumps(
+            {"type": "FeatureCollection", "features": features}).encode("utf-8")), "application/json")},
+    )
+    env_id = resp.json()["id"]
+    records = [{"inventory_number": "201-1", "model": "geoscan-201", "status": "Готов",
+                "base_launch_site": "ВПП Запад", "location_lat": 55.70, "location_lon": 37.55}] + [
+        {"inventory_number": f"GEM-{i}", "model": "geoscan-gemini", "status": "Готов",
+         "base_launch_site": "ВПП Восток", "location_lat": 55.70, "location_lon": 37.62} for i in range(3)
+    ]
+    resp = client.post(
+        "/api/fleets", data={"name": "Смешанный"},
+        files={"file": ("fleet.json", io.BytesIO(json.dumps(records).encode("utf-8")), "application/json")},
+    )
+    fleet_id = resp.json()["id"]
+    form = {
+        "name": "Смешанный парк", "environment_id": env_id, "fleet_id": fleet_id, "survey_type": "RGB",
+        "gsd_cm": "1.9", "work_date": "2026-06-15", "criterion_mode": "Время",
+    }
+    area = {"type": "Polygon", "coordinates": square_coords(37.55, 55.69, 0.07, 0.02)}
+    resp = client.post(
+        "/api/tasks", data=form,
+        files={"area_file": ("area.geojson", io.BytesIO(json.dumps(area).encode("utf-8")), "application/json")},
+    )
+    task_id = resp.json()["id"]
+
+    resp = client.post("/api/plans", data={"task_id": task_id})
+    assert resp.status_code == 200, resp.text
+    detail = client.get(f"/api/plans/{resp.json()['id']}").json()
+
+    assert detail["uav_model"] == "Геоскан 201 + Геоскан Gemini"
+    assert any(line.startswith("Смешанный парк") for line in detail["calculation_log"])
+    # Каждый вылет несет параметры своей модели: высота съемки у камер разная.
+    heights = {s["model_key"]: s["height_m"] for s in detail["sorties"]}
+    assert set(heights) == {"geoscan-201", "geoscan-gemini"}
+    assert heights["geoscan-201"] > heights["geoscan-gemini"]
+    for s in detail["sorties"]:
+        assert s["flight_time_s"] <= s["budget_s"] + 1e-6
+
+    # Независимая проверка сверяет каждый вылет с его собственными
+    # параметрами: покрытие — с полосой захвата своей модели, энергия — с ее
+    # бюджетом.
+    report = client.post("/api/safety-checks", data={"plan_id": detail["id"]}).json()
+    checks = {c["name"]: c for c in report["checks"]}
+    for name in ("coverage", "energy", "reachability", "altitude", "separation"):
+        assert checks[name]["passed"], (name, checks[name]["violations"])

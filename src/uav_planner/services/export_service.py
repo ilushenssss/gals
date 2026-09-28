@@ -104,6 +104,13 @@ def _key_points(sortie: PlanSortie, projector: Projector) -> list[dict]:
     return points
 
 
+def _param(sortie: PlanSortie, plan: PlanDetail, name: str) -> float:
+    """Параметр съемки вылета: в смешанном парке у вылетов разных моделей он
+    свой; у планов, рассчитанных до появления полей в вылете, — из плана."""
+    value = getattr(sortie, name, None)
+    return getattr(plan, name) if value is None else value
+
+
 def _coverage_polygon(sortie: PlanSortie, swath_m: float, projector: Projector):
     """«Зона покрытия» вылета — полоса шириной ``swath_m`` вдоль галсов
     (без переходов), объединенная в один полигон. Приближение: реальная
@@ -134,7 +141,7 @@ def to_geojson(plan: PlanDetail, uav_id: str) -> dict:
                 "takeoff_site": sortie.takeoff_site, "landing_site": sortie.landing_site,
                 "start_utc": sortie.start_utc.isoformat(), "end_utc": sortie.end_utc.isoformat(),
                 "flight_time_s": sortie.flight_time_s, "distance_m": sortie.distance_m,
-                "speed_mps": plan.cruise_speed_mps, "altitude_m": plan.height_m,
+                "speed_mps": _param(sortie, plan, "cruise_speed_mps"), "altitude_m": _param(sortie, plan, "height_m"),
             },
             # Маршрут уже 3D (реальная высота над рельефом или плоский
             # фолбэк, см. plan_service._apply_terrain_profile) — третья
@@ -148,7 +155,7 @@ def to_geojson(plan: PlanDetail, uav_id: str) -> dict:
             "type": "Feature",
             "properties": {
                 "type": "Галсы вылета", "uav_id": sortie.uav_id, "sortie_index": sortie.sortie_index,
-                "swath_m": plan.swath_m, "altitude_m": plan.height_m,
+                "swath_m": _param(sortie, plan, "swath_m"), "altitude_m": _param(sortie, plan, "height_m"),
             },
             "geometry": {
                 "type": sortie.survey_tracks_geojson["type"],
@@ -164,7 +171,7 @@ def to_geojson(plan: PlanDetail, uav_id: str) -> dict:
                 },
                 "geometry": {"type": "Point", "coordinates": [kp["point"].x, kp["point"].y, kp["point"].z]},
             })
-        coverage = _coverage_polygon(sortie, plan.swath_m, projector)
+        coverage = _coverage_polygon(sortie, _param(sortie, plan, "swath_m"), projector)
         if coverage is not None and not coverage.is_empty:
             coverage_wgs84 = projector.to_wgs84(coverage)
             coverage_mapping = mapping(coverage_wgs84)
@@ -172,7 +179,7 @@ def to_geojson(plan: PlanDetail, uav_id: str) -> dict:
                 "type": "Feature",
                 "properties": {
                     "type": "Зона покрытия", "uav_id": sortie.uav_id, "sortie_index": sortie.sortie_index,
-                    "swath_m": plan.swath_m,
+                    "swath_m": _param(sortie, plan, "swath_m"),
                 },
                 "geometry": {
                     "type": coverage_mapping["type"],
@@ -240,8 +247,8 @@ def to_kml(plan: PlanDetail, uav_id: str) -> str:
             "<Placemark><name>Маршрут</name>"
             f"<TimeSpan><begin>{_iso(sortie.start_utc)}</begin><end>{_iso(sortie.end_utc)}</end></TimeSpan>"
             + _kml_extended_data({
-                "uav_id": uav_id, "speed_mps": round(plan.cruise_speed_mps, 2),
-                "altitude_m": round(plan.height_m, 1),
+                "uav_id": uav_id, "speed_mps": round(_param(sortie, plan, "cruise_speed_mps"), 2),
+                "altitude_m": round(_param(sortie, plan, "height_m"), 1),
             })
             + "<LineString><altitudeMode>absolute</altitudeMode>"
             f"<coordinates>{_kml_coords(route_coords)}</coordinates></LineString>"
@@ -262,7 +269,7 @@ def to_kml(plan: PlanDetail, uav_id: str) -> str:
                 f"<Placemark><name>{xml_escape(kp['label'])}</name>"
                 f"<TimeStamp><when>{_iso(kp['utc'])}</when></TimeStamp>"
                 + _kml_extended_data({
-                    "этап": kp["kind"], "speed_mps": round(plan.cruise_speed_mps, 2),
+                    "этап": kp["kind"], "speed_mps": round(_param(sortie, plan, "cruise_speed_mps"), 2),
                     "altitude_m": round(alt, 1),
                 })
                 + "<Point><altitudeMode>absolute</altitudeMode>"

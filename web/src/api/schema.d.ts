@@ -877,6 +877,12 @@ export interface components {
         };
         /** PlanSortie */
         PlanSortie: {
+            /** Budget S */
+            budget_s?: number | null;
+            /** Camera Key */
+            camera_key?: string | null;
+            /** Cruise Speed Mps */
+            cruise_speed_mps?: number | null;
             /** Distance M */
             distance_m: number;
             /**
@@ -886,8 +892,12 @@ export interface components {
             end_utc: string;
             /** Flight Time S */
             flight_time_s: number;
+            /** Height M */
+            height_m?: number | null;
             /** Landing Site */
             landing_site?: string | null;
+            /** Model Key */
+            model_key?: string | null;
             /**
              * Phases
              * @default []
@@ -904,6 +914,8 @@ export interface components {
             survey_tracks_geojson: {
                 [key: string]: unknown;
             };
+            /** Swath M */
+            swath_m?: number | null;
             /** Takeoff Site */
             takeoff_site?: string | null;
             /** Track Geojson */

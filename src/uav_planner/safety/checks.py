@@ -15,6 +15,7 @@ import bisect
 import math
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, tzinfo
+from typing import Sequence
 
 from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
@@ -224,14 +225,23 @@ def check_reachability(
 def check_coverage(
     survey_tracks: list[BaseGeometry],
     working_area: BaseGeometry,
-    swath_m: float,
+    swath_m: float | Sequence[float],
     tolerance: float = DEFAULT_COVERAGE_TOLERANCE,
 ) -> CheckResult:
-    """Рабочая область покрыта полностью (с допуском на численный мусор)."""
+    """Рабочая область покрыта полностью (с допуском на численный мусор).
+
+    ``swath_m`` — одна полоса захвата на все галсы или своя у каждого галса
+    (по порядку ``survey_tracks``): в смешанном парке галсы разных моделей
+    сняты с разной высоты."""
     if working_area.is_empty or working_area.area == 0:
         return CheckResult("coverage", True)
 
-    covered = unary_union([t.buffer(swath_m / 2) for t in survey_tracks]) if survey_tracks else Polygon()
+    swaths = [swath_m] * len(survey_tracks) if isinstance(swath_m, (int, float)) else list(swath_m)
+    if len(swaths) != len(survey_tracks):
+        raise ValueError("число полос захвата не совпадает с числом галсов")
+    covered = (
+        unary_union([t.buffer(w / 2) for t, w in zip(survey_tracks, swaths)]) if survey_tracks else Polygon()
+    )
     uncovered = working_area.difference(covered)
     uncovered_fraction = uncovered.area / working_area.area
     if uncovered_fraction > tolerance:

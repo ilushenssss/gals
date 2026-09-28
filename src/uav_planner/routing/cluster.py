@@ -111,18 +111,25 @@ class Vehicle:
     ``launch_point`` — своя площадка вылета/посадки (UTM, центроид кластера
     на Шаге 2): у разных БВС парка она может быть разной (собственная
     локация экземпляра или ближайшая ВПП обстановки, см.
-    ``api.plan_service._instance_launch_point``)."""
+    ``api.plan_service._instance_launch_point``).
+
+    ``comm_range_m`` — дальность связи модели (``comm_range_km`` паспорта):
+    галс, хоть одна точка которого дальше от площадки, борту не назначается.
+    ``None`` — ограничения нет."""
 
     id: str
     speed_mps: float
     budget_s: float
     launch_point: Point
+    comm_range_m: float | None = None
 
     def __post_init__(self) -> None:
         if self.speed_mps <= 0:
             raise ValueError(f"speed_mps должен быть положительным, получено {self.speed_mps}")
         if self.budget_s <= 0:
             raise ValueError(f"budget_s должен быть положительным, получено {self.budget_s}")
+        if self.comm_range_m is not None and self.comm_range_m <= 0:
+            raise ValueError(f"comm_range_m должен быть положительным, получено {self.comm_range_m}")
 
 
 @dataclass(frozen=True)
@@ -167,9 +174,22 @@ def _nearer(pos: Point, a: Point, b: Point) -> tuple[Point, Point]:
     return (a, b) if pos.distance(a) <= pos.distance(b) else (b, a)
 
 
+def _within_comm_range(vehicle: Vehicle, geometry: BaseGeometry) -> bool:
+    """Весь галс в радиусе связи площадки ``vehicle``. Расстояние от точки
+    вдоль отрезка выпукло, поэтому максимум — в одной из вершин ломаной:
+    проверки вершин достаточно."""
+    if vehicle.comm_range_m is None:
+        return True
+    limit = vehicle.comm_range_m + 1e-6
+    return all(vehicle.launch_point.distance(Point(c)) <= limit for c in geometry.coords)
+
+
 def _solo_feasible(vehicle: Vehicle, track: Track) -> bool:
     """Может ли ``vehicle`` вообще выполнить ``track`` как единственный галс
-    отдельного вылета (переход туда + галс + переход обратно ≤ бюджет)."""
+    отдельного вылета (переход туда + галс + переход обратно ≤ бюджет) и не
+    выйти при этом из зоны связи."""
+    if not _within_comm_range(vehicle, track.geometry):
+        return False
     near, far = _nearer(vehicle.launch_point, track.start_point, track.end_point)
     solo_m = vehicle.launch_point.distance(near) + track.length_m + far.distance(vehicle.launch_point)
     return solo_m / vehicle.speed_mps <= vehicle.budget_s
@@ -330,6 +350,11 @@ def _balance_bottleneck(
     галсов (два вылета, J1 = 72 мин), а второй — один (8 мин). Теперь
     неудачный перенос не обрывает поиск: цикл идет дальше, пока ``patience``
     переносов подряд не улучшат J1.
+
+    Получатель — не обязательно самый свободный борт: если ни один галс
+    перегруженного ему не по силам (бюджет, дальность связи), пробуется
+    следующий по загрузке, пока разброс с ним больше ``epsilon_s``. Раньше
+    цикл в этом случае обрывался, хотя другой борт мог забрать галс.
     """
     by_id = {v.id: v for v in vehicles}
     costs = {vid: _vehicle_time_s(order, by_id[vid], overhead_s) for vid, order in clusters.items()}
@@ -340,21 +365,31 @@ def _balance_bottleneck(
         if len(costs) < 2:
             break
         slow_id = max(costs, key=costs.get)
-        fast_id = min(costs, key=costs.get)
-        if costs[slow_id] - costs[fast_id] <= epsilon_s or not clusters[slow_id]:
+        if not clusters[slow_id]:
             break
 
-        slow_vehicle, fast_vehicle = by_id[slow_id], by_id[fast_id]
-        # «Граничный» галс — тот из кластера перегруженного борта, что ближе
-        # всего по перелёту к площадке недогруженного: именно он лежит на
-        # границе двух территорий. «Последний в собственном туре» борта не
-        # годится — тур строится от ЕГО площадки, и дальняя точка может быть
-        # где угодно, а не рядом с площадкой получателя: так один перенос
-        # валил соседство кластеров, построенное Шагом 2, в «шахматку».
-        moved = min(clusters[slow_id], key=lambda t: _transit_cost_s(fast_vehicle, t))
-        if not _solo_feasible(fast_vehicle, moved):
-            # Этот галс быстрому БВС не по силам соло — переносить некуда.
-            break
+        slow_vehicle = by_id[slow_id]
+        move: tuple[str, Track] | None = None
+        for fast_id in sorted(costs, key=costs.get):
+            if fast_id == slow_id or costs[slow_id] - costs[fast_id] <= epsilon_s:
+                break  # дальше по списку разброс только меньше
+            fast_vehicle = by_id[fast_id]
+            # «Граничный» галс — тот из кластера перегруженного борта, что
+            # ближе всего по перелёту к площадке получателя: именно он лежит
+            # на границе двух территорий. «Последний в собственном туре»
+            # борта не годится — тур строится от ЕГО площадки, и дальняя
+            # точка может быть где угодно, а не рядом с площадкой получателя:
+            # так один перенос валил соседство кластеров, построенное Шагом 2,
+            # в «шахматку». Галсы, которые получателю не по силам соло,
+            # пропускаются — берется ближайший из выполнимых.
+            feasible = [t for t in clusters[slow_id] if _solo_feasible(fast_vehicle, t)]
+            if feasible:
+                move = (fast_id, min(feasible, key=lambda t: _transit_cost_s(fast_vehicle, t)))
+                break
+        if move is None:
+            break  # ни одному борту с заметно меньшей загрузкой нечего передать
+        fast_id, moved = move
+        fast_vehicle = by_id[fast_id]
 
         # Внутри цикла — только «ближайший сосед», без 2-opt: точный тур
         # строится один раз на итоговом распределении (см.

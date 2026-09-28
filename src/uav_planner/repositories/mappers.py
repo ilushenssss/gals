@@ -304,6 +304,12 @@ def plan_to_rows(detail: PlanDetail) -> Plan:
                 route_geom=to_db(shape(sortie.track_geojson)),
                 survey_tracks_geom=to_db_multiline(shape(sortie.survey_tracks_geojson)),
                 phases=[phase.model_dump(mode="json") for phase in sortie.phases],
+                model_key=sortie.model_key,
+                camera_key=sortie.camera_key,
+                height_m=sortie.height_m,
+                swath_m=sortie.swath_m,
+                cruise_speed_mps=sortie.cruise_speed_mps,
+                budget_s=sortie.budget_s,
             )
         )
     return row
@@ -348,6 +354,12 @@ def plan_from_row(row: Plan) -> PlanDetail:
                 track_geojson=from_db_geojson(s.route_geom),
                 survey_tracks_geojson=from_db_geojson(s.survey_tracks_geom),
                 phases=[PlanSortiePhase(**phase) for phase in (s.phases or [])],
+                model_key=s.model_key,
+                camera_key=s.camera_key,
+                height_m=s.height_m,
+                swath_m=s.swath_m,
+                cruise_speed_mps=s.cruise_speed_mps,
+                budget_s=s.budget_s,
             )
             for s in sorted(row.sorties, key=lambda s: (s.uav_id, s.sortie_index))
         ],

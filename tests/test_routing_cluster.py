@@ -268,3 +268,32 @@ def test_balancing_does_not_leave_the_far_vehicle_idle():
     assert j1 <= 55 * 60, j1  # было ≈ 4300 с
     # Весь объем в два вылета не помещается, но лишних быть не должно.
     assert sum(len(s) for s in result.sorties_by_vehicle.values()) == 3
+
+
+def test_balancing_tries_the_next_vehicle_when_the_idlest_cannot_take_any_track():
+    # B свободен, но до галсов ему не долететь (площадка в 1000 км) — раньше
+    # балансировка на этом обрывалась, и A оставался со всеми галсами, хотя
+    # C рядом и может их забрать.
+    tracks = [Track(f"t{i}", LineString([(0, i * 10.0), (1000, i * 10.0)])) for i in range(10)]
+    vehicles = [
+        vehicle("B", 10.0, 100.0, launch_point=Point(1_000_000, 0)),
+        vehicle("A", 10.0, 10_000.0),
+        vehicle("C", 10.0, 10_000.0, launch_point=Point(1500, 0)),
+    ]
+    result = cluster_assign_and_route(tracks, vehicles)
+
+    assert result.sorties_by_vehicle["B"] == []
+    assert sum(len(s.tracks) for s in result.sorties_by_vehicle["C"]) >= 1
+    assert result.unassigned_tracks == []
+
+
+def test_track_beyond_comm_range_goes_to_the_vehicle_that_reaches_it():
+    far = Track("far", LineString([(3000, 0), (3100, 0)]))
+    short_range = Vehicle(id="S", speed_mps=10.0, budget_s=10_000.0, launch_point=LAUNCH, comm_range_m=2000.0)
+    long_range = Vehicle(id="L", speed_mps=10.0, budget_s=10_000.0, launch_point=Point(-500, 0), comm_range_m=5000.0)
+
+    alone = cluster_assign_and_route([far], [short_range])
+    assert alone.unassigned_tracks == [far]
+
+    both = cluster_assign_and_route([far], [short_range, long_range])
+    assert [t for s in both.sorties_by_vehicle["L"] for t in s.tracks] == [far]

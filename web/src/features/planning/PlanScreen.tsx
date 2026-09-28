@@ -133,16 +133,71 @@ function Schedule({
   )
 }
 
+type SurveyGroup = {
+  model: string
+  camera: string
+  height: number
+  swath: number
+  speed: number
+  budget: number
+  sorties: number
+}
+
+/**
+ * Параметры съемки по группам «модель + камера». В смешанном парке у
+ * вылетов разных моделей своя высота, полоса, скорость и бюджет; планы,
+ * рассчитанные до появления этих полей у вылета, берут их из карточки.
+ */
+function surveyGroups(plan: PlanDetail): SurveyGroup[] {
+  const groups = new Map<string, SurveyGroup>()
+  for (const sortie of plan.sorties) {
+    const model = sortie.model_key ?? plan.model_key
+    const camera = sortie.camera_key ?? plan.camera_key
+    const key = `${model}/${camera}`
+    const group = groups.get(key)
+    if (group) {
+      group.sorties += 1
+      continue
+    }
+    groups.set(key, {
+      model,
+      camera,
+      height: sortie.height_m ?? plan.height_m,
+      swath: sortie.swath_m ?? plan.swath_m,
+      speed: sortie.cruise_speed_mps ?? plan.cruise_speed_mps,
+      budget: sortie.budget_s ?? plan.budget_s,
+      sorties: 1,
+    })
+  }
+  return [...groups.values()]
+}
+
 function Metrics({ plan }: { plan: PlanDetail }) {
-  return (
-    <>
-      <KeyValue
-        rows={[
+  const groups = surveyGroups(plan)
+  const survey =
+    groups.length > 1
+      ? [
+          ["Смешанный парк", plan.uav_model],
+          ...groups.map((g) => [
+            `${g.model} · ${g.camera}`,
+            <span className="mono">
+              {Math.round(g.height)} м · полоса {Math.round(g.swath)} м · {formatNumber(g.speed)} м/с ·{" "}
+              {formatDuration(g.budget)} · {plural(g.sorties, "вылет", "вылета", "вылетов")}
+            </span>,
+          ]),
+        ]
+      : [
           ["Модель и камера", `${plan.uav_model} · ${plan.camera_key}`],
           ["Высота полета", <span className="mono">{Math.round(plan.height_m)} м</span>],
           ["Полоса захвата", <span className="mono">{Math.round(plan.swath_m)} м</span>],
           ["Крейсерская скорость", <span className="mono">{formatNumber(plan.cruise_speed_mps)} м/с</span>],
           ["Бюджет вылета", <span className="mono">{formatDuration(plan.budget_s)}</span>],
+        ]
+  return (
+    <>
+      <KeyValue
+        rows={[
+          ...survey,
           ["Критерий", plan.criterion_mode === "Компромисс" ? `Компромисс, α = ${formatNumber(plan.criterion_alpha, 2)}` : plan.criterion_mode],
           ["J1 · время до конца работ", <span className="mono">{formatDuration(plan.j1_s)}</span>],
           ["J2 · суммарный налет", <span className="mono">{formatDuration(plan.j2_s)}</span>],

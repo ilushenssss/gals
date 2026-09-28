@@ -1184,6 +1184,39 @@
       },
       "PlanSortie": {
         "properties": {
+          "budget_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget S"
+          },
+          "camera_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Key"
+          },
+          "cruise_speed_mps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cruise Speed Mps"
+          },
           "distance_m": {
             "title": "Distance M",
             "type": "number"
@@ -1197,6 +1230,17 @@
             "title": "Flight Time S",
             "type": "number"
           },
+          "height_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height M"
+          },
           "landing_site": {
             "anyOf": [
               {
@@ -1207,6 +1251,17 @@
               }
             ],
             "title": "Landing Site"
+          },
+          "model_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Key"
           },
           "phases": {
             "default": [],
@@ -1229,6 +1284,17 @@
             "additionalProperties": true,
             "title": "Survey Tracks Geojson",
             "type": "object"
+          },
+          "swath_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Swath M"
           },
           "takeoff_site": {
             "anyOf": [
